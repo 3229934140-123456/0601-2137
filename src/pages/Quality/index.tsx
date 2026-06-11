@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   MessageSquareWarning,
@@ -23,7 +23,7 @@ import { clsx } from 'clsx';
 import type { QualityFeedback } from '../../data/types';
 
 export const QualityPage = () => {
-  const { feedbacks, user, subscriptions, addFeedback, updateFeedback, pushNotification } = useStore();
+  const { feedbacks, user, subscriptions, addFeedback, updateFeedback, pushNotification, pendingDetailId, setPendingDetailId } = useStore();
   const [activeTab, setActiveTab] = useState('all');
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -126,6 +126,17 @@ export const QualityPage = () => {
     });
     alert('问题反馈已提交！');
   };
+
+  useEffect(() => {
+    if (pendingDetailId.quality) {
+      const fb = feedbacks.find((f) => f.id === pendingDetailId.quality);
+      if (fb) {
+        setSelectedFeedback(fb);
+        setShowDetailModal(true);
+      }
+      setPendingDetailId('quality', undefined);
+    }
+  }, [pendingDetailId.quality, feedbacks]);
 
   const handleRatingSubmit = () => {
     if (selectedFeedback && rating > 0) {

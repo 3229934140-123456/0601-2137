@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
 import {
@@ -44,6 +44,10 @@ export const ApprovalPage = () => {
     batchApproveLowRisk,
     subscriptions,
     addApproval,
+    activeApprover,
+    setActiveApprover,
+    pendingDetailId,
+    setPendingDetailId,
   } = useStore();
 
   const [activeTab, setActiveTab] = useState('todo');
@@ -78,8 +82,14 @@ export const ApprovalPage = () => {
     [approvals]
   );
 
+  const allApprovers = useMemo(() => {
+    const set = new Set<string>();
+    approvals.forEach((a) => a.nodes.forEach((n) => set.add(n.approver)));
+    return Array.from(set).sort();
+  }, [approvals]);
+
   const todoApprovals = approvals.filter(
-    (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === user.name
+    (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover
   );
   const pendingCount = approvals.filter((a) => a.status === 'pending').length;
   const approvedCount = approvals.filter((a) => a.status === 'approved').length;
@@ -99,7 +109,7 @@ export const ApprovalPage = () => {
 
     let matchesTab = true;
     if (activeTab === 'todo') {
-      matchesTab = a.status === 'pending' && a.nodes[a.currentNode]?.approver === user.name;
+      matchesTab = a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover;
     } else if (activeTab === 'pending') {
       matchesTab = a.status === 'pending';
     } else if (activeTab === 'approved') {
@@ -124,7 +134,7 @@ export const ApprovalPage = () => {
     return filteredApprovals
       .filter((a) => {
         if (a.status !== 'pending') return false;
-        if (a.nodes[a.currentNode]?.approver !== user.name) return false;
+        if (a.nodes[a.currentNode]?.approver !== activeApprover) return false;
         if (a.type === 'new_subscription') return false;
         if (a.type === 'termination') return false;
         if (a.type === 'quota_expand') {
@@ -135,7 +145,24 @@ export const ApprovalPage = () => {
         return true;
       })
       .map((a) => a.id);
-  }, [filteredApprovals, user.name]);
+  }, [filteredApprovals, activeApprover]);
+
+  const getRejectReason = (approval: ApprovalRequest) => {
+    if (approval.status !== 'rejected') return '';
+    const rejectNode = [...approval.nodes].reverse().find((n) => n.status === 'rejected');
+    return rejectNode?.comment || '';
+  };
+
+  useEffect(() => {
+    if (pendingDetailId.approval) {
+      const approval = approvals.find((a) => a.id === pendingDetailId.approval);
+      if (approval) {
+        setSelectedApproval(approval);
+        setShowDetailModal(true);
+      }
+      setPendingDetailId('approval', undefined);
+    }
+  }, [pendingDetailId.approval, approvals]);
 
   const tabs = [
     { key: 'todo', label: `待我审批 (${todoApprovals.length})` },
@@ -184,7 +211,7 @@ export const ApprovalPage = () => {
 
   const toggleSelectAll = () => {
     const selectable = filteredApprovals.filter(
-      (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === user.name
+      (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover
     ).map((a) => a.id);
     const allSelected = selectable.every((id) => selectedIds.includes(id));
     setSelectedIds(allSelected ? [] : selectable);
@@ -282,13 +309,6 @@ export const ApprovalPage = () => {
     alert('申请已提交！');
   };
 
-  const rejectReason = selectedApproval?.status === 'rejected'
-    ? (() => {
-        const rejectNode = [...selectedApproval.nodes].reverse().find((n) => n.status === 'rejected');
-        return rejectNode?.comment || '';
-      })()
-    : '';
-
   const resetFilters = () => {
     setTypeFilter('all');
     setProductFilter('all');
@@ -341,6 +361,21 @@ export const ApprovalPage = () => {
       <div className="flex items-center justify-between">
         <Tabs tabs={tabs} activeKey={activeTab} onChange={setActiveTab} />
         <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-700/30 border border-dark-600">
+            <User className="w-4 h-4 text-dark-400" />
+            <span className="text-sm text-dark-400">当前审批身份：</span>
+            <select
+              value={activeApprover}
+              onChange={(e) => setActiveApprover(e.target.value)}
+              className="bg-transparent text-sm text-white border-none outline-none cursor-pointer"
+            >
+              {allApprovers.map((name) => (
+                <option key={name} value={name} className="bg-dark-800">
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
           {activeTab === 'todo' && (
             <>
               <button
@@ -500,7 +535,7 @@ export const ApprovalPage = () => {
               filteredApprovals.filter(
                 (a) =>
                   a.status === 'pending' &&
-                  a.nodes[a.currentNode]?.approver === user.name
+                  a.nodes[a.currentNode]?.approver === activeApprover
               ).length ? (
                 <CheckSquare className="w-5 h-5 text-accent-cyan" />
               ) : (
@@ -538,7 +573,8 @@ export const ApprovalPage = () => {
         {filteredApprovals.map((approval, index) => {
           const isMyTurn =
             approval.status === 'pending' &&
-            approval.nodes[approval.currentNode]?.approver === user.name;
+            approval.nodes[approval.currentNode]?.approver === activeApprover;
+          const rejectReason = getRejectReason(approval);
           const isSelectable = batchMode && isMyTurn;
           return (
             <motion.div
@@ -782,13 +818,13 @@ export const ApprovalPage = () => {
               </p>
             </div>
 
-            {selectedApproval.status === 'rejected' && rejectReason && (
+            {selectedApproval.status === 'rejected' && getRejectReason(selectedApproval) && (
               <div className="p-4 rounded-xl bg-accent-red/10 border border-accent-red/30">
                 <div className="flex items-center gap-2 text-accent-red font-medium mb-2">
                   <AlertTriangle className="w-5 h-5" />
                   拒绝原因
                 </div>
-                <p className="text-dark-200">{rejectReason}</p>
+                <p className="text-dark-200">{getRejectReason(selectedApproval)}</p>
               </div>
             )}
 
@@ -861,7 +897,7 @@ export const ApprovalPage = () => {
 
             {selectedApproval.status === 'pending' &&
               selectedApproval.nodes[selectedApproval.currentNode]?.approver ===
-                user.name && (
+                activeApprover && (
                 <div className="p-4 rounded-xl bg-accent-cyan/10 border border-accent-cyan/30">
                   <h4 className="font-medium text-white mb-3">我的审批</h4>
                   <textarea

@@ -28,6 +28,8 @@ import { formatDate } from '../utils/date';
 interface StoreState extends AppState {
   monthlyExpenses: { month: string; amount: number }[];
   rolePermissionsMap: Record<string, Permission[]>;
+  activeApprover: string;
+  pendingDetailId: { approval?: string; quality?: string };
   setSubscriptions: (subscriptions: Subscription[]) => void;
   addSubscription: (subscription: Subscription) => void;
   updateSubscription: (subscription: Subscription) => void;
@@ -45,6 +47,8 @@ interface StoreState extends AppState {
   updateRolePermissions: (role: string, permissions: Permission[]) => void;
   applyRolePermissionsToMembers: (role: string) => void;
   pushNotification: (n: Omit<Notification, 'id' | 'read' | 'createdAt'>) => void;
+  setActiveApprover: (name: string) => void;
+  setPendingDetailId: (key: 'approval' | 'quality', id: string | undefined) => void;
 }
 
 export const defaultRolePermissions: Record<string, Permission[]> = {
@@ -99,6 +103,15 @@ export const useStore = create<StoreState>((set, get) => ({
   notifications: mockNotifications,
   monthlyExpenses: mockMonthlyExpenses,
   rolePermissionsMap: defaultRolePermissions,
+  activeApprover: mockCurrentUser.name,
+  pendingDetailId: {},
+
+  setActiveApprover: (name) => set({ activeApprover: name }),
+
+  setPendingDetailId: (key, id) =>
+    set((state) => ({
+      pendingDetailId: { ...state.pendingDetailId, [key]: id },
+    })),
 
   pushNotification: (n) => {
     const state = get();
@@ -294,12 +307,10 @@ export const useStore = create<StoreState>((set, get) => ({
       if (a.status !== 'pending') return a;
 
       const clone: ApprovalRequest = JSON.parse(JSON.stringify(a));
-      clone.nodes.forEach((node, idx) => {
-        if (idx <= clone.currentNode) {
-          node.status = 'approved';
-          node.comment = node.comment || '批量审批通过';
-          node.approveTime = node.approveTime || nowStr;
-        }
+      clone.nodes.forEach((node) => {
+        node.status = 'approved';
+        node.comment = node.comment || '批量审批通过';
+        node.approveTime = node.approveTime || nowStr;
       });
       clone.currentNode = clone.nodes.length - 1;
       clone.status = 'approved';

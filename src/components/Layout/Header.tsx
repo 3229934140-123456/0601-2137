@@ -9,7 +9,7 @@ import { clsx } from 'clsx';
 
 export const Header = () => {
   const navigate = useNavigate();
-  const { user, notifications, markNotificationRead, markAllNotificationsRead } = useStore();
+  const { user, notifications, markNotificationRead, markAllNotificationsRead, setPendingDetailId } = useStore();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -98,6 +98,13 @@ export const Header = () => {
                             approval: '/approval',
                           };
                           if (notification.page && pageMap[notification.page]) {
+                            if (notification.params?.id) {
+                              if (notification.page === 'approval') {
+                                setPendingDetailId('approval', notification.params.id);
+                              } else if (notification.page === 'quality') {
+                                setPendingDetailId('quality', notification.params.id);
+                              }
+                            }
                             setShowNotifications(false);
                             navigate(pageMap[notification.page]);
                           }
