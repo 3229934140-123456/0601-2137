@@ -5,6 +5,9 @@ import type {
   QualityFeedback,
   ApprovalRequest,
   Notification,
+  Member,
+  Quota,
+  Receiver,
 } from '../data/types';
 import {
   mockProducts,
@@ -29,12 +32,15 @@ interface StoreState extends AppState {
   updateFeedback: (feedback: QualityFeedback) => void;
   addApproval: (approval: ApprovalRequest) => void;
   updateApproval: (approval: ApprovalRequest) => void;
+  updateMember: (member: Member) => void;
+  updateQuota: (quota: Quota) => void;
   addNotification: (notification: Notification) => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
+  approveAndApplyEffect: (approval: ApprovalRequest) => void;
 }
 
-export const useStore = create<StoreState>((set) => ({
+export const useStore = create<StoreState>((set, get) => ({
   user: mockCurrentUser,
   subscriptions: mockSubscriptions,
   products: mockProducts,
@@ -85,6 +91,20 @@ export const useStore = create<StoreState>((set) => ({
       ),
     })),
 
+  updateMember: (member) =>
+    set((state) => ({
+      members: state.members.map((m) =>
+        m.id === member.id ? member : m
+      ),
+    })),
+
+  updateQuota: (quota) =>
+    set((state) => ({
+      quotas: state.quotas.map((q) =>
+        q.id === quota.id ? quota : q
+      ),
+    })),
+
   addNotification: (notification) =>
     set((state) => ({
       notifications: [notification, ...state.notifications],
@@ -101,4 +121,53 @@ export const useStore = create<StoreState>((set) => ({
     set((state) => ({
       notifications: state.notifications.map((n) => ({ ...n, read: true })),
     })),
+
+  approveAndApplyEffect: (approval) => {
+    const state = get();
+    const updatedApprovals = state.approvals.map((a) =>
+      a.id === approval.id ? approval : a
+    );
+
+    if (approval.status === 'approved' && approval.type === 'quota_expand') {
+      const matchReason = approval.reason.match(/扩容额度[：:]\s*(\d+)/);
+      const expandAmount = matchReason ? parseInt(matchReason[1], 10) : 0;
+
+      if (expandAmount > 0) {
+        const updatedQuotas = state.quotas.map((q) => {
+          if (q.subscriptionId === approval.subscriptionId) {
+            return { ...q, totalQuota: q.totalQuota + expandAmount };
+          }
+          return q;
+        });
+        const updatedSubscriptions = state.subscriptions.map((s) => {
+          if (s.id === approval.subscriptionId) {
+            return { ...s, quota: s.quota + expandAmount };
+          }
+          return s;
+        });
+        set({
+          approvals: updatedApprovals,
+          quotas: updatedQuotas,
+          subscriptions: updatedSubscriptions,
+        });
+        return;
+      }
+    }
+
+    if (approval.status === 'approved' && approval.type === 'new_subscription') {
+      const updatedSubscriptions = state.subscriptions.map((s) => {
+        if (s.id === approval.subscriptionId && s.status === 'pending') {
+          return { ...s, status: 'active' as const };
+        }
+        return s;
+      });
+      set({
+        approvals: updatedApprovals,
+        subscriptions: updatedSubscriptions,
+      });
+      return;
+    }
+
+    set({ approvals: updatedApprovals });
+  },
 }));

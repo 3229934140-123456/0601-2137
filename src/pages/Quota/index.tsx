@@ -10,8 +10,6 @@ import {
   Calendar,
 } from 'lucide-react';
 import {
-  LineChart,
-  Line,
   AreaChart,
   Area,
   BarChart,
@@ -29,16 +27,18 @@ import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { Tabs } from '../../components/ui/Tabs';
 import { formatNumber, formatPercentage } from '../../utils/format';
+import { formatDate } from '../../utils/date';
 import { clsx } from 'clsx';
 
 export const QuotaPage = () => {
-  const { quotas, user } = useStore();
+  const { quotas, user, addApproval } = useStore();
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedProducts, setSelectedProducts] = useState<string[]>([quotas[0]?.id || ''].filter(Boolean));
   const [showExpandModal, setShowExpandModal] = useState(false);
-  const [expandQuota, setExpandQuota] = useState<number>(10000);
+  const [expandQuotaAmount, setExpandQuotaAmount] = useState<number>(10000);
   const [expandReason, setExpandReason] = useState('');
   const [expandDuration, setExpandDuration] = useState('30');
+  const [selectedQuotaId, setSelectedQuotaId] = useState<string>('');
 
   const tabs = [
     { key: 'overview', label: '额度总览' },
@@ -48,7 +48,7 @@ export const QuotaPage = () => {
 
   const totalQuota = quotas.reduce((sum, q) => sum + q.totalQuota, 0);
   const totalUsed = quotas.reduce((sum, q) => sum + q.usedQuota, 0);
-  const overallUsage = (totalUsed / totalQuota) * 100;
+  const overallUsage = totalQuota > 0 ? (totalUsed / totalQuota) * 100 : 0;
   const alertCount = quotas.filter((q) => (q.usedQuota / q.totalQuota) * 100 >= q.alertThreshold).length;
 
   const toggleProduct = (id: string) => {
@@ -83,6 +83,35 @@ export const QuotaPage = () => {
   };
 
   const colors = ['#06B6D4', '#8B5CF6', '#F97316', '#10B981', '#EF4444'];
+
+  const handleExpandSubmit = () => {
+    if (!selectedQuotaId || !expandReason.trim()) return;
+    const quota = quotas.find((q) => q.id === selectedQuotaId);
+    if (!quota) return;
+
+    addApproval({
+      id: `a_${Date.now()}`,
+      type: 'quota_expand',
+      title: `${quota.productName}临时扩容申请`,
+      subscriptionId: quota.subscriptionId,
+      productName: quota.productName,
+      applicant: user.name,
+      applyTime: formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss'),
+      reason: `申请扩容额度：${expandQuotaAmount} 次，有效期 ${expandDuration} 天。${expandReason}`,
+      status: 'pending',
+      currentNode: 0,
+      nodes: [
+        { id: `n_${Date.now()}_1`, name: '部门主管审批', approver: '王总', status: 'current' },
+        { id: `n_${Date.now()}_2`, name: '财务审核', approver: '赵丽', status: 'pending' },
+      ],
+    });
+
+    setShowExpandModal(false);
+    setExpandReason('');
+    setExpandQuotaAmount(10000);
+    setExpandDuration('30');
+    setSelectedQuotaId('');
+  };
 
   return (
     <div className="space-y-6">
@@ -224,7 +253,10 @@ export const QuotaPage = () => {
                       </div>
                       <div className="flex-1" />
                       <button
-                        onClick={() => setShowExpandModal(true)}
+                        onClick={() => {
+                          setSelectedQuotaId(quota.id);
+                          setShowExpandModal(true);
+                        }}
                         className="btn-secondary flex items-center gap-2"
                       >
                         <Plus className="w-4 h-4" />
@@ -343,7 +375,7 @@ export const QuotaPage = () => {
 
       <Modal
         isOpen={showExpandModal}
-        onClose={() => setShowExpandModal(false)}
+        onClose={() => { setShowExpandModal(false); setExpandReason(''); setSelectedQuotaId(''); }}
         title="申请临时扩容"
         size="md"
       >
@@ -351,6 +383,12 @@ export const QuotaPage = () => {
           <div className="p-4 rounded-xl bg-dark-700/30">
             <p className="text-sm text-dark-400 mb-1">申请人</p>
             <p className="font-medium text-white">{user.name} · {user.department}</p>
+            {selectedQuotaId && (
+              <>
+                <p className="text-sm text-dark-400 mt-2 mb-1">申请产品</p>
+                <p className="font-medium text-white">{quotas.find((q) => q.id === selectedQuotaId)?.productName}</p>
+              </>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-dark-300 mb-2">
@@ -358,8 +396,8 @@ export const QuotaPage = () => {
             </label>
             <input
               type="number"
-              value={expandQuota}
-              onChange={(e) => setExpandQuota(Number(e.target.value))}
+              value={expandQuotaAmount}
+              onChange={(e) => setExpandQuotaAmount(Number(e.target.value))}
               className="input-field"
               placeholder="请输入扩容额度"
             />
@@ -393,16 +431,13 @@ export const QuotaPage = () => {
             />
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
-            <button onClick={() => setShowExpandModal(false)} className="btn-secondary">
+            <button onClick={() => { setShowExpandModal(false); setExpandReason(''); setSelectedQuotaId(''); }} className="btn-secondary">
               取消
             </button>
             <button
-              onClick={() => {
-                setShowExpandModal(false);
-                alert('扩容申请已提交，等待审批！');
-              }}
+              onClick={handleExpandSubmit}
               className="btn-primary"
-              disabled={!expandReason.trim()}
+              disabled={!expandReason.trim() || !selectedQuotaId}
             >
               提交申请
             </button>

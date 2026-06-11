@@ -23,7 +23,7 @@ import { clsx } from 'clsx';
 import type { QualityFeedback } from '../../data/types';
 
 export const QualityPage = () => {
-  const { feedbacks, user, subscriptions, addFeedback } = useStore();
+  const { feedbacks, user, subscriptions, addFeedback, updateFeedback } = useStore();
   const [activeTab, setActiveTab] = useState('all');
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -136,6 +136,7 @@ export const QualityPage = () => {
         status: 'closed' as const,
       };
       setSelectedFeedback(updated);
+      updateFeedback(updated);
       setRating(0);
       setComment('');
       alert('感谢您的评价！');

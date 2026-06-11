@@ -32,7 +32,7 @@ import { getStatusText, getTypeText } from '../../utils/format';
 import type { ApprovalRequest } from '../../data/types';
 
 export const ApprovalPage = () => {
-  const { approvals, user, updateApproval } = useStore();
+  const { approvals, user, approveAndApplyEffect } = useStore();
   const [activeTab, setActiveTab] = useState('pending');
   const [selectedApproval, setSelectedApproval] = useState<ApprovalRequest | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -114,7 +114,7 @@ export const ApprovalPage = () => {
     } else {
       updatedApproval.status = 'approved';
     }
-    updateApproval(updatedApproval);
+    approveAndApplyEffect(updatedApproval);
     setShowDetailModal(false);
     setApproveComment('');
     alert('审批已通过！');
@@ -130,7 +130,7 @@ export const ApprovalPage = () => {
       currentNode.approveTime = new Date().toISOString().replace('T', ' ').slice(0, 19);
     }
     updatedApproval.status = 'rejected';
-    updateApproval(updatedApproval);
+    approveAndApplyEffect(updatedApproval);
     setShowRejectModal(false);
     setShowDetailModal(false);
     setRejectComment('');

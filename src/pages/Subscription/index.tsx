@@ -14,6 +14,8 @@ import {
   ChevronRight,
   Filter,
   Search,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { StatCard } from '../../components/ui/StatCard';
@@ -22,10 +24,10 @@ import { Tabs } from '../../components/ui/Tabs';
 import { Modal } from '../../components/ui/Modal';
 import { formatDate, getDaysRemaining } from '../../utils/date';
 import { formatCurrency, formatNumber, getRoleText, truncateText } from '../../utils/format';
-import type { Product, Subscription } from '../../data/types';
+import type { Product, Subscription, Receiver } from '../../data/types';
 
 export const SubscriptionPage = () => {
-  const { subscriptions, products, user } = useStore();
+  const { subscriptions, products, user, addSubscription, addApproval, updateSubscription } = useStore();
   const [activeTab, setActiveTab] = useState('my');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedSubscription, setSelectedSubscription] = useState<Subscription | null>(null);
@@ -33,6 +35,13 @@ export const SubscriptionPage = () => {
   const [showReceiversModal, setShowReceiversModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [applyReason, setApplyReason] = useState('');
+  const [applyDuration, setApplyDuration] = useState('12');
+  const [applyAutoRenewal, setApplyAutoRenewal] = useState('true');
+  const [newReceiverName, setNewReceiverName] = useState('');
+  const [newReceiverEmail, setNewReceiverEmail] = useState('');
+  const [newReceiverPhone, setNewReceiverPhone] = useState('');
+  const [newReceiverDept, setNewReceiverDept] = useState('');
 
   const activeCount = subscriptions.filter((s) => s.status === 'active').length;
   const pendingCount = subscriptions.filter((s) => s.status === 'pending').length;
@@ -56,6 +65,94 @@ export const SubscriptionPage = () => {
     { key: 'my', label: '我的订阅' },
     { key: 'catalog', label: '产品目录' },
   ];
+
+  const handleApplyProduct = () => {
+    if (!selectedProduct) return;
+    const duration = parseInt(applyDuration, 10);
+    const now = new Date();
+    const endDate = new Date(now);
+    endDate.setMonth(endDate.getMonth() + duration);
+
+    const newSub: Subscription = {
+      id: `s_${Date.now()}`,
+      productId: selectedProduct.id,
+      productName: selectedProduct.name,
+      provider: selectedProduct.provider,
+      status: 'pending',
+      startDate: formatDate(now),
+      endDate: formatDate(endDate),
+      quota: selectedProduct.defaultQuota,
+      usedQuota: 0,
+      receivers: [
+        { id: `r_${Date.now()}`, name: user.name, email: user.email, phone: user.phone, department: user.department },
+      ],
+      autoRenewal: applyAutoRenewal === 'true',
+      createdAt: formatDate(now),
+    };
+
+    addSubscription(newSub);
+
+    const approvalId = `a_${Date.now()}`;
+    addApproval({
+      id: approvalId,
+      type: 'new_subscription',
+      title: `${selectedProduct.name}开通申请`,
+      subscriptionId: newSub.id,
+      productName: selectedProduct.name,
+      applicant: user.name,
+      applyTime: formatDate(now, 'YYYY-MM-DD HH:mm:ss'),
+      reason: applyReason || `申请开通${selectedProduct.name}，订阅周期${duration}个月。`,
+      status: 'pending',
+      currentNode: 0,
+      nodes: [
+        { id: `n_${Date.now()}_1`, name: '部门主管审批', approver: '王总', status: 'current' },
+        { id: `n_${Date.now()}_2`, name: '财务审核', approver: '赵丽', status: 'pending' },
+        { id: `n_${Date.now()}_3`, name: '总经理审批', approver: '李总', status: 'pending' },
+      ],
+    });
+
+    setShowApplyModal(false);
+    setApplyReason('');
+    setApplyDuration('12');
+    setApplyAutoRenewal('true');
+    setSelectedProduct(null);
+  };
+
+  const handleAddReceiver = () => {
+    if (!selectedSubscription || !newReceiverName.trim() || !newReceiverEmail.trim()) return;
+    const newReceiver: Receiver = {
+      id: `r_${Date.now()}`,
+      name: newReceiverName.trim(),
+      email: newReceiverEmail.trim(),
+      phone: newReceiverPhone.trim(),
+      department: newReceiverDept.trim(),
+    };
+    const updated: Subscription = {
+      ...selectedSubscription,
+      receivers: [...selectedSubscription.receivers, newReceiver],
+    };
+    updateSubscription(updated);
+    setSelectedSubscription(updated);
+    setNewReceiverName('');
+    setNewReceiverEmail('');
+    setNewReceiverPhone('');
+    setNewReceiverDept('');
+  };
+
+  const handleRemoveReceiver = (receiverId: string) => {
+    if (!selectedSubscription) return;
+    const updated: Subscription = {
+      ...selectedSubscription,
+      receivers: selectedSubscription.receivers.filter((r) => r.id !== receiverId),
+    };
+    updateSubscription(updated);
+    setSelectedSubscription(updated);
+  };
+
+  const handleOpenReceiversModal = (subscription: Subscription) => {
+    setSelectedSubscription(subscription);
+    setShowReceiversModal(true);
+  };
 
   return (
     <div className="space-y-6">
@@ -125,7 +222,7 @@ export const SubscriptionPage = () => {
 
           <div className="grid gap-4">
             {filteredSubscriptions.map((subscription, index) => {
-              const usagePercent = (subscription.usedQuota / subscription.quota) * 100;
+              const usagePercent = subscription.quota > 0 ? (subscription.usedQuota / subscription.quota) * 100 : 0;
               const daysRemaining = getDaysRemaining(subscription.endDate);
               return (
                 <motion.div
@@ -201,10 +298,7 @@ export const SubscriptionPage = () => {
                     </div>
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => {
-                          setSelectedSubscription(subscription);
-                          setShowReceiversModal(true);
-                        }}
+                        onClick={() => handleOpenReceiversModal(subscription)}
                         className="p-2 rounded-lg text-dark-400 hover:text-white hover:bg-dark-700/50 transition-colors"
                         title="接收人配置"
                       >
@@ -302,7 +396,11 @@ export const SubscriptionPage = () => {
 
       <Modal
         isOpen={showApplyModal && !!selectedProduct}
-        onClose={() => setShowApplyModal(false)}
+        onClose={() => {
+          setShowApplyModal(false);
+          setApplyReason('');
+          setSelectedProduct(null);
+        }}
         title="申请开通产品"
         size="lg"
       >
@@ -318,13 +416,19 @@ export const SubscriptionPage = () => {
                 <textarea
                   rows={3}
                   placeholder="请描述您的使用场景和业务需求..."
+                  value={applyReason}
+                  onChange={(e) => setApplyReason(e.target.value)}
                   className="input-field resize-none"
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-dark-300 mb-2">订阅周期</label>
-                  <select className="input-field">
+                  <select
+                    value={applyDuration}
+                    onChange={(e) => setApplyDuration(e.target.value)}
+                    className="input-field"
+                  >
                     <option value="1">1 个月</option>
                     <option value="3">3 个月</option>
                     <option value="6">6 个月</option>
@@ -333,7 +437,11 @@ export const SubscriptionPage = () => {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-dark-300 mb-2">是否自动续订</label>
-                  <select className="input-field">
+                  <select
+                    value={applyAutoRenewal}
+                    onChange={(e) => setApplyAutoRenewal(e.target.value)}
+                    className="input-field"
+                  >
                     <option value="true">是</option>
                     <option value="false">否</option>
                   </select>
@@ -351,28 +459,18 @@ export const SubscriptionPage = () => {
                     <p className="text-sm font-medium text-white">{user.name}</p>
                     <p className="text-xs text-dark-400">{user.email}</p>
                   </div>
-                  <span className="badge badge-active">默认接收人</span>
+                  <span className="px-2 py-0.5 text-xs rounded-full bg-accent-cyan/20 text-accent-cyan">默认接收人</span>
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-dark-300 mb-2">申请说明</label>
-                <textarea
-                  rows={2}
-                  placeholder="补充说明..."
-                  className="input-field resize-none"
-                />
               </div>
             </div>
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
-              <button onClick={() => setShowApplyModal(false)} className="btn-secondary">
+              <button onClick={() => { setShowApplyModal(false); setApplyReason(''); setSelectedProduct(null); }} className="btn-secondary">
                 取消
               </button>
               <button
-                onClick={() => {
-                  setShowApplyModal(false);
-                  alert('申请已提交，等待审批！');
-                }}
+                onClick={handleApplyProduct}
                 className="btn-primary"
+                disabled={!applyReason.trim()}
               >
                 提交申请
               </button>
@@ -383,7 +481,7 @@ export const SubscriptionPage = () => {
 
       <Modal
         isOpen={showReceiversModal && !!selectedSubscription}
-        onClose={() => setShowReceiversModal(false)}
+        onClose={() => { setShowReceiversModal(false); setNewReceiverName(''); setNewReceiverEmail(''); setNewReceiverPhone(''); setNewReceiverDept(''); }}
         title="接收人配置"
         size="md"
       >
@@ -402,28 +500,63 @@ export const SubscriptionPage = () => {
                     <p className="text-sm font-medium text-white">{receiver.name}</p>
                     <p className="text-xs text-dark-400">{receiver.department} · {receiver.email}</p>
                   </div>
-                  <button className="p-2 rounded-lg text-dark-400 hover:text-accent-red hover:bg-accent-red/10 transition-colors">
-                    <Users className="w-4 h-4" />
+                  <button
+                    onClick={() => handleRemoveReceiver(receiver.id)}
+                    className="p-2 rounded-lg text-dark-400 hover:text-accent-red hover:bg-accent-red/10 transition-colors"
+                    title="删除接收人"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               ))}
+              {selectedSubscription.receivers.length === 0 && (
+                <p className="text-center text-dark-500 py-4">暂无接收人</p>
+              )}
             </div>
-            <button className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-dark-600 text-dark-400 hover:border-accent-cyan hover:text-accent-cyan transition-colors">
-              <Plus className="w-4 h-4" />
-              添加接收人
-            </button>
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
-              <button onClick={() => setShowReceiversModal(false)} className="btn-secondary">
-                关闭
-              </button>
+            <div className="p-4 rounded-xl bg-dark-700/30 border border-dark-600 space-y-3">
+              <p className="text-sm font-medium text-white">添加新接收人</p>
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="text"
+                  placeholder="姓名 *"
+                  value={newReceiverName}
+                  onChange={(e) => setNewReceiverName(e.target.value)}
+                  className="input-field text-sm py-2"
+                />
+                <input
+                  type="email"
+                  placeholder="邮箱 *"
+                  value={newReceiverEmail}
+                  onChange={(e) => setNewReceiverEmail(e.target.value)}
+                  className="input-field text-sm py-2"
+                />
+                <input
+                  type="tel"
+                  placeholder="手机号"
+                  value={newReceiverPhone}
+                  onChange={(e) => setNewReceiverPhone(e.target.value)}
+                  className="input-field text-sm py-2"
+                />
+                <input
+                  type="text"
+                  placeholder="部门"
+                  value={newReceiverDept}
+                  onChange={(e) => setNewReceiverDept(e.target.value)}
+                  className="input-field text-sm py-2"
+                />
+              </div>
               <button
-                onClick={() => {
-                  setShowReceiversModal(false);
-                  alert('配置已保存！');
-                }}
-                className="btn-primary"
+                onClick={handleAddReceiver}
+                disabled={!newReceiverName.trim() || !newReceiverEmail.trim()}
+                className="w-full flex items-center justify-center gap-2 p-2.5 rounded-lg border-2 border-dashed border-dark-500 text-dark-300 hover:border-accent-cyan hover:text-accent-cyan transition-colors disabled:opacity-40 disabled:hover:border-dark-500 disabled:hover:text-dark-300"
               >
-                保存配置
+                <Plus className="w-4 h-4" />
+                添加接收人
+              </button>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
+              <button onClick={() => setShowReceiversModal(false)} className="btn-primary">
+                完成
               </button>
             </div>
           </div>
