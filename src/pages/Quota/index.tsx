@@ -31,7 +31,7 @@ import { formatDate } from '../../utils/date';
 import { clsx } from 'clsx';
 
 export const QuotaPage = () => {
-  const { quotas, user, addApproval } = useStore();
+  const { quotas, user, addApproval, pushNotification } = useStore();
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedProducts, setSelectedProducts] = useState<string[]>([quotas[0]?.id || ''].filter(Boolean));
   const [showExpandModal, setShowExpandModal] = useState(false);
@@ -89,8 +89,9 @@ export const QuotaPage = () => {
     const quota = quotas.find((q) => q.id === selectedQuotaId);
     if (!quota) return;
 
+    const approvalId = `a_${Date.now()}`;
     addApproval({
-      id: `a_${Date.now()}`,
+      id: approvalId,
       type: 'quota_expand',
       title: `${quota.productName}临时扩容申请`,
       subscriptionId: quota.subscriptionId,
@@ -104,6 +105,14 @@ export const QuotaPage = () => {
         { id: `n_${Date.now()}_1`, name: '部门主管审批', approver: '王总', status: 'current' },
         { id: `n_${Date.now()}_2`, name: '财务审核', approver: '赵丽', status: 'pending' },
       ],
+    });
+
+    pushNotification({
+      type: 'quota',
+      title: '扩容申请已提交',
+      message: `【${quota.productName}】扩容 ${expandQuotaAmount} 次的申请已提交，请等待审批。`,
+      page: 'approval',
+      params: { id: approvalId },
     });
 
     setShowExpandModal(false);

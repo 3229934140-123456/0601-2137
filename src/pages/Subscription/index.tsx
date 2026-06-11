@@ -27,7 +27,7 @@ import { formatCurrency, formatNumber, getRoleText, truncateText } from '../../u
 import type { Product, Subscription, Receiver } from '../../data/types';
 
 export const SubscriptionPage = () => {
-  const { subscriptions, products, user, addSubscription, addApproval, updateSubscription } = useStore();
+  const { subscriptions, products, user, addSubscription, addApproval, updateSubscription, pushNotification } = useStore();
   const [activeTab, setActiveTab] = useState('my');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedSubscription, setSelectedSubscription] = useState<Subscription | null>(null);
@@ -109,6 +109,14 @@ export const SubscriptionPage = () => {
         { id: `n_${Date.now()}_2`, name: '财务审核', approver: '赵丽', status: 'pending' },
         { id: `n_${Date.now()}_3`, name: '总经理审批', approver: '李总', status: 'pending' },
       ],
+    });
+
+    pushNotification({
+      type: 'subscription',
+      title: '新订申请已提交',
+      message: `【${selectedProduct.name}】的开通申请已提交，请等待审批。`,
+      page: 'approval',
+      params: { id: approvalId },
     });
 
     setShowApplyModal(false);

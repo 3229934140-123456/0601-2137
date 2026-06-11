@@ -177,11 +177,13 @@ export interface ApprovalRequest {
 
 export interface Notification {
   id: string;
-  type: 'delivery' | 'quota' | 'approval' | 'quality' | 'billing';
+  type: 'delivery' | 'quota' | 'approval' | 'quality' | 'billing' | 'subscription';
   title: string;
   message: string;
   read: boolean;
   createdAt: string;
+  page?: 'subscription' | 'approval' | 'quality' | 'quota' | 'billing' | 'members' | 'delivery';
+  params?: Record<string, string>;
 }
 
 export interface AppState {

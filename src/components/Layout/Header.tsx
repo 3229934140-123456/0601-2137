@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Bell, Search, ChevronDown, Settings, LogOut } from 'lucide-react';
 import { useStore } from '../../store/useStore';
@@ -7,6 +8,7 @@ import { getTypeText } from '../../utils/format';
 import { clsx } from 'clsx';
 
 export const Header = () => {
+  const navigate = useNavigate();
   const { user, notifications, markNotificationRead, markAllNotificationsRead } = useStore();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -20,6 +22,7 @@ export const Header = () => {
       approval: '✅',
       quality: '🔧',
       billing: '💰',
+      subscription: '📋',
     };
     return icons[type] || '📢';
   };
@@ -83,7 +86,22 @@ export const Header = () => {
                     notifications.map((notification) => (
                       <div
                         key={notification.id}
-                        onClick={() => markNotificationRead(notification.id)}
+                        onClick={() => {
+                          markNotificationRead(notification.id);
+                          const pageMap: Record<string, string> = {
+                            subscription: '/subscription',
+                            delivery: '/delivery',
+                            quota: '/quota',
+                            quality: '/quality',
+                            billing: '/billing',
+                            members: '/members',
+                            approval: '/approval',
+                          };
+                          if (notification.page && pageMap[notification.page]) {
+                            setShowNotifications(false);
+                            navigate(pageMap[notification.page]);
+                          }
+                        }}
                         className={clsx(
                           'p-4 border-b border-dark-700/50 hover:bg-dark-700/30 cursor-pointer transition-colors',
                           !notification.read && 'bg-accent-cyan/5'

@@ -23,7 +23,7 @@ import { clsx } from 'clsx';
 import type { QualityFeedback } from '../../data/types';
 
 export const QualityPage = () => {
-  const { feedbacks, user, subscriptions, addFeedback, updateFeedback } = useStore();
+  const { feedbacks, user, subscriptions, addFeedback, updateFeedback, pushNotification } = useStore();
   const [activeTab, setActiveTab] = useState('all');
   const [showNewModal, setShowNewModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -137,6 +137,15 @@ export const QualityPage = () => {
       };
       setSelectedFeedback(updated);
       updateFeedback(updated);
+
+      pushNotification({
+        type: 'quality',
+        title: '质量问题已关闭',
+        message: `【${selectedFeedback.productName}】的问题"${selectedFeedback.title}"已评价并关闭，评分：${rating}星。`,
+        page: 'quality',
+        params: { id: selectedFeedback.id },
+      });
+
       setRating(0);
       setComment('');
       alert('感谢您的评价！');
