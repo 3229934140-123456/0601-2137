@@ -7,6 +7,7 @@ import { QualityPage } from "./pages/Quality";
 import { BillingPage } from "./pages/Billing";
 import { MembersPage } from "./pages/Members";
 import { ApprovalPage } from "./pages/Approval";
+import { NotificationsPage } from "./pages/Notifications";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/billing" element={<BillingPage />} />
           <Route path="/members" element={<MembersPage />} />
           <Route path="/approval" element={<ApprovalPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
         </Route>
       </Routes>
     </Router>

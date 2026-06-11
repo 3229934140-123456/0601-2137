@@ -26,6 +26,17 @@ import {
   SlidersHorizontal,
   X,
   AlertTriangle,
+  AlertOctagon,
+  ShieldAlert,
+  Shield,
+  ListChecks,
+  History,
+  BarChart3,
+  TrendingDown,
+  TimerReset,
+  Sparkles,
+  EyeOff,
+  Workflow,
 } from 'lucide-react';
 import { useStore } from '../../store/useStore';
 import { StatCard } from '../../components/ui/StatCard';
@@ -33,8 +44,8 @@ import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
 import { Modal } from '../../components/ui/Modal';
 import { formatDate, formatDateTime } from '../../utils/date';
-import { getStatusText, getTypeText } from '../../utils/format';
-import type { ApprovalRequest } from '../../data/types';
+import { getStatusText, getTypeText, formatNumber } from '../../utils/format';
+import type { ApprovalRequest, ApprovalTemplateKey } from '../../data/types';
 
 export const ApprovalPage = () => {
   const {
@@ -43,34 +54,44 @@ export const ApprovalPage = () => {
     approveAndApplyEffect,
     batchApproveLowRisk,
     subscriptions,
-    addApproval,
+    addApprovalWithTemplate,
+    approvalTemplates,
+    autoSelectTemplate,
     activeApprover,
     setActiveApprover,
     pendingDetailId,
     setPendingDetailId,
+    previewBatchImpact,
   } = useStore();
 
-  const [activeTab, setActiveTab] = useState('todo');
+  const [activeTab, setActiveTab] = useState('workbench');
   const [selectedApproval, setSelectedApproval] = useState<ApprovalRequest | null>(null);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [productFilter, setProductFilter] = useState<string>('all');
   const [applicantFilter, setApplicantFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [approverFilter, setApproverFilter] = useState<string>('all');
+  const [riskFilter, setRiskFilter] = useState<string>('all');
+  const [overdueFilter, setOverdueFilter] = useState<string>('all');
   const [approveComment, setApproveComment] = useState('');
   const [rejectComment, setRejectComment] = useState('');
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchMode, setBatchMode] = useState(false);
+  const [pendingFilterSet, setPendingFilterSet] = useState<null | Record<string, string>>(null);
 
   const [createForm, setCreateForm] = useState({
     type: 'renewal' as ApprovalRequest['type'],
     subscriptionId: '',
     title: '',
     reason: '',
+    templateKey: '' as ApprovalTemplateKey | '',
+    amount: 0,
   });
 
   const allProducts = useMemo(
@@ -81,12 +102,16 @@ export const ApprovalPage = () => {
     () => Array.from(new Set(approvals.map((a) => a.applicant))).sort(),
     [approvals]
   );
-
   const allApprovers = useMemo(() => {
     const set = new Set<string>();
     approvals.forEach((a) => a.nodes.forEach((n) => set.add(n.approver)));
     return Array.from(set).sort();
   }, [approvals]);
+
+  const isOverdue = (a: ApprovalRequest) => {
+    if (a.status !== 'pending' || !a.deadline) return false;
+    return new Date(a.deadline.replace(/-/g, '/')).getTime() < Date.now();
+  };
 
   const todoApprovals = approvals.filter(
     (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover
@@ -106,6 +131,9 @@ export const ApprovalPage = () => {
     const matchesProduct = productFilter === 'all' || a.productName === productFilter;
     const matchesApplicant = applicantFilter === 'all' || a.applicant === applicantFilter;
     const matchesStatus = statusFilter === 'all' || a.status === statusFilter;
+    const matchesApprover = approverFilter === 'all' || a.nodes[a.currentNode]?.approver === approverFilter;
+    const matchesRisk = riskFilter === 'all' || a.riskLevel === riskFilter;
+    const matchesOverdue = overdueFilter === 'all' || (overdueFilter === 'yes' ? isOverdue(a) : !isOverdue(a));
 
     let matchesTab = true;
     if (activeTab === 'todo') {
@@ -120,12 +148,24 @@ export const ApprovalPage = () => {
       matchesTab = a.applicant === user.name;
     }
 
+    if (pendingFilterSet) {
+      for (const [k, v] of Object.entries(pendingFilterSet)) {
+        if (k === 'type' && a.type !== v) return false;
+        if (k === 'riskLevel' && a.riskLevel !== v) return false;
+        if (k === 'currentApprover' && a.nodes[a.currentNode]?.approver !== v) return false;
+        if (k === 'overdue' && (v === 'yes' ? !isOverdue(a) : isOverdue(a))) return false;
+      }
+    }
+
     return (
       matchesSearch &&
       matchesType &&
       matchesProduct &&
       matchesApplicant &&
       matchesStatus &&
+      matchesApprover &&
+      matchesRisk &&
+      matchesOverdue &&
       matchesTab
     );
   });
@@ -139,7 +179,7 @@ export const ApprovalPage = () => {
         if (a.type === 'termination') return false;
         if (a.type === 'quota_expand') {
           const m = a.reason.match(/扩容额度[：:]\s*(\d+)/);
-          const amt = m ? parseInt(m[1], 10) : 0;
+          const amt = m ? parseInt(m[1], 10) : a.amount || 0;
           return amt <= 50000;
         }
         return true;
@@ -164,14 +204,177 @@ export const ApprovalPage = () => {
     }
   }, [pendingDetailId.approval, approvals]);
 
-  const tabs = [
-    { key: 'todo', label: `待我审批 (${todoApprovals.length})` },
-    { key: 'pending', label: '全部待办' },
-    { key: 'approved', label: '已通过' },
-    { key: 'rejected', label: '已拒绝' },
-    { key: 'my', label: '我的申请' },
-    { key: 'all', label: '全部' },
-  ];
+  const getRiskColor = (lvl?: string) => {
+    if (lvl === 'high') return 'bg-accent-red/10 text-accent-red border-accent-red';
+    if (lvl === 'low') return 'bg-accent-green/10 text-accent-green border-accent-green';
+    return 'bg-accent-orange/10 text-accent-orange border-accent-orange';
+  };
+  const getRiskIcon = (lvl?: string) => {
+    if (lvl === 'high') return <ShieldAlert className="w-3 h-3" />;
+    if (lvl === 'low') return <Shield className="w-3 h-3" />;
+    return <AlertTriangle className="w-3 h-3" />;
+  };
+  const getRiskText = (lvl?: string) =>
+    lvl === 'high' ? '高风险' : lvl === 'low' ? '低风险' : '中风险';
+
+  // 工作台统计
+  const workbenchStats = useMemo(() => {
+    const todo = approvals.filter((a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover);
+    const byType: Record<string, number> = { renewal: 0, termination: 0, quota_expand: 0, new_subscription: 0 };
+    const byRisk: Record<string, number> = { low: 0, medium: 0, high: 0 };
+    const byApprover: Record<string, number> = {};
+    let overdue = 0;
+    todo.forEach((a) => {
+      byType[a.type] = (byType[a.type] || 0) + 1;
+      const r = a.riskLevel || 'medium';
+      byRisk[r] = (byRisk[r] || 0) + 1;
+      const ap = a.nodes[a.currentNode]?.approver || '未知';
+      byApprover[ap] = (byApprover[ap] || 0) + 1;
+      if (isOverdue(a)) overdue += 1;
+    });
+    return { total: todo.length, byType, byRisk, byApprover, overdue };
+  }, [approvals, activeApprover]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    const selectable = filteredApprovals.filter(
+      (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover
+    ).map((a) => a.id);
+    const allSelected = selectable.every((id) => selectedIds.includes(id));
+    setSelectedIds(allSelected ? [] : selectable);
+  };
+
+  const handleApprove = () => {
+    if (!selectedApproval) return;
+    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(selectedApproval));
+    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
+    const nowStr = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
+    if (currentNode) {
+      currentNode.status = 'approved';
+      currentNode.comment = approveComment || '同意';
+      currentNode.approveTime = nowStr;
+    }
+    if (updatedApproval.currentNode < updatedApproval.nodes.length - 1) {
+      updatedApproval.currentNode++;
+      updatedApproval.nodes[updatedApproval.currentNode].status = 'current';
+      updatedApproval.nodes[updatedApproval.currentNode].arriveTime = nowStr;
+    } else {
+      updatedApproval.status = 'approved';
+    }
+    approveAndApplyEffect(updatedApproval);
+    setShowDetailModal(false);
+    setApproveComment('');
+    alert('审批已通过！');
+  };
+
+  const handleReject = () => {
+    if (!selectedApproval) return;
+    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(selectedApproval));
+    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
+    const nowStr = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
+    if (currentNode) {
+      currentNode.status = 'rejected';
+      currentNode.comment = rejectComment || '拒绝';
+      currentNode.approveTime = nowStr;
+    }
+    updatedApproval.status = 'rejected';
+    approveAndApplyEffect(updatedApproval);
+    setShowRejectModal(false);
+    setShowDetailModal(false);
+    setRejectComment('');
+    alert('审批已拒绝！');
+  };
+
+  const handleBatchApprove = () => {
+    if (selectedIds.length === 0) return;
+    if (!confirm(`确定批量通过 ${selectedIds.length} 条申请吗？`)) return;
+    batchApproveLowRisk(selectedIds);
+    setSelectedIds([]);
+    setBatchMode(false);
+  };
+
+  const handleQuickApprove = (approval: ApprovalRequest) => {
+    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(approval));
+    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
+    const nowStr = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
+    if (currentNode) {
+      currentNode.status = 'approved';
+      currentNode.comment = '快速审批通过';
+      currentNode.approveTime = nowStr;
+    }
+    if (updatedApproval.currentNode < updatedApproval.nodes.length - 1) {
+      updatedApproval.currentNode++;
+      updatedApproval.nodes[updatedApproval.currentNode].status = 'current';
+      updatedApproval.nodes[updatedApproval.currentNode].arriveTime = nowStr;
+    } else {
+      updatedApproval.status = 'approved';
+    }
+    approveAndApplyEffect(updatedApproval);
+  };
+
+  const handleQuickPassLowRisk = () => {
+    if (lowRiskIds.length === 0) return;
+    if (!confirm(`确定一键通过全部 ${lowRiskIds.length} 条低风险申请吗？这会立刻更新额度、订阅状态。`)) return;
+    batchApproveLowRisk(lowRiskIds);
+    setSelectedIds([]);
+    setBatchMode(false);
+  };
+
+  const handleCreateSubmit = () => {
+    if (!createForm.subscriptionId || !createForm.title.trim() || !createForm.reason.trim()) {
+      alert('请填写完整信息');
+      return;
+    }
+    const sub = subscriptions.find((s) => s.id === createForm.subscriptionId);
+    if (!sub) return;
+    addApprovalWithTemplate({
+      type: createForm.type,
+      subscriptionId: sub.id,
+      productName: sub.productName,
+      title: createForm.title,
+      reason: createForm.reason,
+      applicant: user.name,
+      templateKey: (createForm.templateKey || undefined) as ApprovalTemplateKey | undefined,
+      amount: createForm.amount || undefined,
+    });
+    setShowCreateModal(false);
+    setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '', templateKey: '', amount: 0 });
+    alert('申请已提交！');
+  };
+
+  useEffect(() => {
+    if (pendingFilterSet) {
+      // 切换到待我审批 Tab 让卡片筛选生效
+      setActiveTab('todo');
+    }
+  }, [pendingFilterSet]);
+
+  const resetFilters = () => {
+    setTypeFilter('all');
+    setProductFilter('all');
+    setApplicantFilter('all');
+    setStatusFilter('all');
+    setApproverFilter('all');
+    setRiskFilter('all');
+    setOverdueFilter('all');
+    setSearchQuery('');
+    setPendingFilterSet(null);
+  };
+
+  const activeFilterCount =
+    (typeFilter !== 'all' ? 1 : 0) +
+    (productFilter !== 'all' ? 1 : 0) +
+    (applicantFilter !== 'all' ? 1 : 0) +
+    (statusFilter !== 'all' ? 1 : 0) +
+    (approverFilter !== 'all' ? 1 : 0) +
+    (riskFilter !== 'all' ? 1 : 0) +
+    (overdueFilter !== 'all' ? 1 : 0) +
+    (pendingFilterSet ? Object.keys(pendingFilterSet).length : 0);
 
   const getApprovalTypeIcon = (type: string) => {
     switch (type) {
@@ -203,129 +406,22 @@ export const ApprovalPage = () => {
     }
   };
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  };
+  const tabs = [
+    { key: 'workbench', label: '审批工作台' },
+    { key: 'todo', label: `待我审批 (${todoApprovals.length})` },
+    { key: 'pending', label: '全部待办' },
+    { key: 'approved', label: '已通过' },
+    { key: 'rejected', label: '已拒绝' },
+    { key: 'my', label: '我的申请' },
+    { key: 'all', label: '全部' },
+  ];
 
-  const toggleSelectAll = () => {
-    const selectable = filteredApprovals.filter(
-      (a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover
-    ).map((a) => a.id);
-    const allSelected = selectable.every((id) => selectedIds.includes(id));
-    setSelectedIds(allSelected ? [] : selectable);
-  };
-
-  const handleApprove = () => {
-    if (!selectedApproval) return;
-    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(selectedApproval));
-    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
-    if (currentNode) {
-      currentNode.status = 'approved';
-      currentNode.comment = approveComment || '同意';
-      currentNode.approveTime = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
-    }
-    if (updatedApproval.currentNode < updatedApproval.nodes.length - 1) {
-      updatedApproval.currentNode++;
-      updatedApproval.nodes[updatedApproval.currentNode].status = 'current';
-    } else {
-      updatedApproval.status = 'approved';
-    }
-    approveAndApplyEffect(updatedApproval);
-    setShowDetailModal(false);
-    setApproveComment('');
-    alert('审批已通过！');
-  };
-
-  const handleReject = () => {
-    if (!selectedApproval) return;
-    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(selectedApproval));
-    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
-    if (currentNode) {
-      currentNode.status = 'rejected';
-      currentNode.comment = rejectComment || '拒绝';
-      currentNode.approveTime = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
-    }
-    updatedApproval.status = 'rejected';
-    approveAndApplyEffect(updatedApproval);
-    setShowRejectModal(false);
-    setShowDetailModal(false);
-    setRejectComment('');
-    alert('审批已拒绝！');
-  };
-
-  const handleBatchApprove = () => {
-    if (selectedIds.length === 0) return;
-    if (!confirm(`确定批量通过 ${selectedIds.length} 条申请吗？`)) return;
-    batchApproveLowRisk(selectedIds);
-    setSelectedIds([]);
-    setBatchMode(false);
-  };
-
-  const handleQuickApprove = (approval: ApprovalRequest) => {
-    setSelectedApproval(approval);
-    const updatedApproval: ApprovalRequest = JSON.parse(JSON.stringify(approval));
-    const currentNode = updatedApproval.nodes[updatedApproval.currentNode];
-    if (currentNode) {
-      currentNode.status = 'approved';
-      currentNode.comment = '快速审批通过';
-      currentNode.approveTime = formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss');
-    }
-    if (updatedApproval.currentNode < updatedApproval.nodes.length - 1) {
-      updatedApproval.currentNode++;
-      updatedApproval.nodes[updatedApproval.currentNode].status = 'current';
-    } else {
-      updatedApproval.status = 'approved';
-    }
-    approveAndApplyEffect(updatedApproval);
-  };
-
-  const handleCreateSubmit = () => {
-    if (!createForm.subscriptionId || !createForm.title.trim() || !createForm.reason.trim()) {
-      alert('请填写完整信息');
-      return;
-    }
-    const sub = subscriptions.find((s) => s.id === createForm.subscriptionId);
-    if (!sub) return;
-    addApproval({
-      id: `a_${Date.now()}`,
-      type: createForm.type,
-      title: createForm.title,
-      subscriptionId: sub.id,
-      productName: sub.productName,
-      applicant: user.name,
-      applyTime: formatDate(new Date(), 'YYYY-MM-DD HH:mm:ss'),
-      reason: createForm.reason,
-      status: 'pending',
-      currentNode: 0,
-      nodes: [
-        { id: `n_${Date.now()}_1`, name: '部门主管审批', approver: '王总', status: 'current' },
-        { id: `n_${Date.now()}_2`, name: '财务审核', approver: '赵丽', status: 'pending' },
-      ],
-    });
-    setShowCreateModal(false);
-    setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '' });
-    alert('申请已提交！');
-  };
-
-  const resetFilters = () => {
-    setTypeFilter('all');
-    setProductFilter('all');
-    setApplicantFilter('all');
-    setStatusFilter('all');
-    setSearchQuery('');
-  };
-
-  const activeFilterCount =
-    (typeFilter !== 'all' ? 1 : 0) +
-    (productFilter !== 'all' ? 1 : 0) +
-    (applicantFilter !== 'all' ? 1 : 0) +
-    (statusFilter !== 'all' ? 1 : 0);
+  const batchImpact = previewBatchImpact(selectedIds);
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-4 gap-4">
+      {/* 顶部概览统计 */}
+      <div className="grid grid-cols-5 gap-4">
         <StatCard
           title="待我审批"
           value={todoApprovals.length}
@@ -333,6 +429,13 @@ export const ApprovalPage = () => {
           gradient="from-accent-orange/20 to-accent-red/20"
           trend={{ value: todoApprovals.length, isPositive: todoApprovals.length === 0 }}
           delay={0}
+        />
+        <StatCard
+          title="全部待办"
+          value={pendingCount}
+          icon={ListChecks}
+          gradient="from-accent-cyan/20 to-accent-purple/20"
+          delay={0.05}
         />
         <StatCard
           title="已通过"
@@ -347,36 +450,279 @@ export const ApprovalPage = () => {
           value={rejectedCount}
           icon={XCircle}
           gradient="from-accent-red/20 to-accent-purple/20"
-          delay={0.2}
+          delay={0.15}
         />
         <StatCard
           title="我的申请"
           value={myCount}
           icon={FileCheck}
           gradient="from-accent-purple/20 to-primary-500/20"
-          delay={0.3}
+          delay={0.2}
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <Tabs tabs={tabs} activeKey={activeTab} onChange={setActiveTab} />
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-700/30 border border-dark-600">
-            <User className="w-4 h-4 text-dark-400" />
-            <span className="text-sm text-dark-400">当前审批身份：</span>
-            <select
-              value={activeApprover}
-              onChange={(e) => setActiveApprover(e.target.value)}
-              className="bg-transparent text-sm text-white border-none outline-none cursor-pointer"
-            >
-              {allApprovers.map((name) => (
-                <option key={name} value={name} className="bg-dark-800">
-                  {name}
-                </option>
-              ))}
-            </select>
+      {/* 工作台：多维统计卡片（仅工作台 Tab 显示） */}
+      {activeTab === 'workbench' && (
+        <>
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-accent-cyan" />
+                我的待办汇总（按身份：{activeApprover}）
+              </h3>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-dark-700/30 border border-dark-600">
+                <User className="w-4 h-4 text-dark-400" />
+                <select
+                  value={activeApprover}
+                  onChange={(e) => setActiveApprover(e.target.value)}
+                  className="bg-transparent text-sm text-white border-none outline-none cursor-pointer"
+                >
+                  {allApprovers.map((name) => (
+                    <option key={name} value={name} className="bg-dark-800">
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 gap-4">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => setPendingFilterSet({ type: 'quota_expand' })}
+                className="text-left card card-hover p-4 bg-gradient-to-br from-accent-orange/10 to-accent-yellow/10 border border-accent-orange/20"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <Zap className="w-5 h-5 text-accent-orange" />
+                  <span className="text-xs px-2 py-0.5 rounded bg-accent-orange/10 text-accent-orange">扩容</span>
+                </div>
+                <p className="text-2xl font-bold font-display text-white mb-1">{workbenchStats.byType.quota_expand || 0}</p>
+                <p className="text-xs text-dark-400">待处理扩容申请</p>
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => setPendingFilterSet({ type: 'new_subscription' })}
+                className="text-left card card-hover p-4 bg-gradient-to-br from-accent-purple/10 to-accent-cyan/10 border border-accent-purple/20"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <Database className="w-5 h-5 text-accent-purple" />
+                  <span className="text-xs px-2 py-0.5 rounded bg-accent-purple/10 text-accent-purple">新订</span>
+                </div>
+                <p className="text-2xl font-bold font-display text-white mb-1">{workbenchStats.byType.new_subscription || 0}</p>
+                <p className="text-xs text-dark-400">待处理新订申请</p>
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => setPendingFilterSet({ type: 'renewal' })}
+                className="text-left card card-hover p-4 bg-gradient-to-br from-accent-cyan/10 to-accent-green/10 border border-accent-cyan/20"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <RefreshCw className="w-5 h-5 text-accent-cyan" />
+                  <span className="text-xs px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan">续订</span>
+                </div>
+                <p className="text-2xl font-bold font-display text-white mb-1">{workbenchStats.byType.renewal || 0}</p>
+                <p className="text-xs text-dark-400">待处理续订申请</p>
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                onClick={() => setPendingFilterSet({ type: 'termination' })}
+                className="text-left card card-hover p-4 bg-gradient-to-br from-accent-red/10 to-accent-orange/10 border border-accent-red/20"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <Ban className="w-5 h-5 text-accent-red" />
+                  <span className="text-xs px-2 py-0.5 rounded bg-accent-red/10 text-accent-red">停订</span>
+                </div>
+                <p className="text-2xl font-bold font-display text-white mb-1">{workbenchStats.byType.termination || 0}</p>
+                <p className="text-xs text-dark-400">待处理停订申请</p>
+              </motion.button>
+            </div>
           </div>
-          {activeTab === 'todo' && (
+
+          <div className="grid grid-cols-3 gap-4">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              onClick={() => setPendingFilterSet({ riskLevel: 'high' })}
+              className="text-left card p-5 bg-gradient-to-br from-accent-red/10 to-accent-orange/5 border border-accent-red/20"
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-accent-red/20 flex items-center justify-center">
+                  <AlertOctagon className="w-5 h-5 text-accent-red" />
+                </div>
+                <div>
+                  <p className="font-semibold text-white">高风险待办</p>
+                  <p className="text-xs text-dark-400">需要优先处理</p>
+                </div>
+                <div className="ml-auto text-3xl font-bold font-display text-accent-red">
+                  {workbenchStats.byRisk.high || 0}
+                </div>
+              </div>
+              <p className="text-xs text-dark-400 flex items-center gap-1">
+                <TrendingDown className="w-3 h-3" />
+                涉及大额扩容/停订/合规审批
+              </p>
+            </motion.button>
+
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              onClick={() => setPendingFilterSet({ riskLevel: 'low' })}
+              className="text-left card p-5 bg-gradient-to-br from-accent-green/10 to-accent-cyan/5 border border-accent-green/20"
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-accent-green/20 flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-accent-green" />
+                </div>
+                <div>
+                  <p className="font-semibold text-white">低风险待办</p>
+                  <p className="text-xs text-dark-400">可一键批量通过</p>
+                </div>
+                <div className="ml-auto text-3xl font-bold font-display text-accent-green">
+                  {workbenchStats.byRisk.low || 0}
+                </div>
+              </div>
+              <p className="text-xs text-dark-400 flex items-center gap-1">
+                <Zap className="w-3 h-3" />
+                低金额日常申请，建议快速处理
+              </p>
+            </motion.button>
+
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              onClick={() => setPendingFilterSet({ overdue: 'yes' })}
+              className="text-left card p-5 bg-gradient-to-br from-accent-orange/15 to-accent-red/5 border border-accent-orange/30"
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-accent-orange/20 flex items-center justify-center">
+                  <TimerReset className="w-5 h-5 text-accent-orange" />
+                </div>
+                <div>
+                  <p className="font-semibold text-white">超时 / 即将到期</p>
+                  <p className="text-xs text-dark-400">已超过处理时限</p>
+                </div>
+                <div className="ml-auto text-3xl font-bold font-display text-accent-orange">
+                  {workbenchStats.overdue || 0}
+                </div>
+              </div>
+              <p className="text-xs text-dark-400 flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                请关注这些高优先级申请，避免影响业务
+              </p>
+            </motion.button>
+          </div>
+
+          <div className="card p-5">
+            <h3 className="font-semibold text-white mb-4 flex items-center gap-2">
+              <User className="w-5 h-5 text-accent-cyan" />
+              按当前审批人分布（点击查看对应节点的待办）
+            </h3>
+            <div className="grid grid-cols-5 gap-4">
+              {Object.entries(workbenchStats.byApprover)
+                .filter(([, n]) => n > 0)
+                .map(([approver, count]) => (
+                  <motion.button
+                    key={approver}
+                    whileHover={{ scale: 1.03 }}
+                    onClick={() => setPendingFilterSet({ currentApprover: approver })}
+                    className="p-4 rounded-xl bg-dark-700/30 border border-dark-600 hover:border-accent-cyan/40 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent-cyan/30 to-accent-purple/30 flex items-center justify-center font-semibold text-accent-cyan">
+                        {approver[0]}
+                      </div>
+                      <div>
+                        <p className="font-medium text-white text-sm">{approver}</p>
+                        <p className="text-xs text-dark-400">当前节点审批人</p>
+                      </div>
+                    </div>
+                    <p className="text-2xl font-bold font-display text-accent-cyan">{count}</p>
+                    <p className="text-xs text-dark-400 mt-1">条待此节点处理</p>
+                  </motion.button>
+                ))}
+              {Object.values(workbenchStats.byApprover).every((n) => !n) && (
+                <div className="col-span-5 py-8 text-center text-dark-400">暂无待办 🎉</div>
+              )}
+            </div>
+          </div>
+
+          <div className="card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-white flex items-center gap-2">
+                <ListChecks className="w-5 h-5 text-accent-cyan" />
+                我的待办列表（点击统计卡片后会按条件筛选到这里）
+              </h3>
+              {pendingFilterSet && (
+                <button
+                  onClick={() => setPendingFilterSet(null)}
+                  className="text-xs text-accent-cyan hover:underline flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" />
+                  清除卡片筛选
+                </button>
+              )}
+            </div>
+            {pendingFilterSet && (
+              <div className="mb-4 flex flex-wrap gap-2">
+                {Object.entries(pendingFilterSet).map(([k, v]) => (
+                  <span
+                    key={k}
+                    className="px-3 py-1 text-xs rounded-full bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20"
+                  >
+                    {k === 'type' && `类型: ${getTypeText(v)}`}
+                    {k === 'riskLevel' && `风险: ${getRiskText(v)}`}
+                    {k === 'currentApprover' && `当前审批人: ${v}`}
+                    {k === 'overdue' && (v === 'yes' ? '已超时' : '未超时')}
+                  </span>
+                ))}
+              </div>
+            )}
+            <ApprovalList
+              approvals={filteredApprovals}
+              activeApprover={activeApprover}
+              lowRiskIds={lowRiskIds}
+              isMyTurnCheck={(a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover}
+              getRejectReason={getRejectReason}
+              onViewDetail={(a) => { setSelectedApproval(a); setShowDetailModal(true); }}
+              onQuickApprove={handleQuickApprove}
+              onOpenApprove={(a) => { setSelectedApproval(a); setApproveComment(''); setShowDetailModal(true); }}
+              onOpenReject={(a) => { setSelectedApproval(a); setRejectComment(''); setShowRejectModal(true); }}
+              batchMode={batchMode}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              getApprovalTypeIcon={getApprovalTypeIcon}
+              getApprovalTypeColor={getApprovalTypeColor}
+              getRiskColor={getRiskColor}
+              getRiskIcon={getRiskIcon}
+              getRiskText={getRiskText}
+              isOverdue={isOverdue}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Tab 切换栏 + 顶栏操作 */}
+      <div className="flex items-center justify-between">
+        <Tabs tabs={tabs} activeKey={activeTab} onChange={(k) => { setActiveTab(k); setPendingFilterSet(null); }} />
+        <div className="flex items-center gap-2">
+          {activeTab !== 'workbench' && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-dark-700/30 border border-dark-600">
+              <User className="w-4 h-4 text-dark-400" />
+              <span className="text-sm text-dark-400">审批身份：</span>
+              <select
+                value={activeApprover}
+                onChange={(e) => setActiveApprover(e.target.value)}
+                className="bg-transparent text-sm text-white border-none outline-none cursor-pointer"
+              >
+                {allApprovers.map((name) => (
+                  <option key={name} value={name} className="bg-dark-800">
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {(activeTab === 'todo' || activeTab === 'workbench') && (
             <>
               <button
                 onClick={() => setBatchMode(!batchMode)}
@@ -392,10 +738,7 @@ export const ApprovalPage = () => {
               </button>
               {lowRiskIds.length > 0 && (
                 <button
-                  onClick={() => {
-                    setSelectedIds(lowRiskIds);
-                    handleBatchApprove();
-                  }}
+                  onClick={handleQuickPassLowRisk}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-green/10 text-accent-green hover:bg-accent-green/20 border border-accent-green/30 transition-colors"
                 >
                   <Zap className="w-4 h-4" />
@@ -414,6 +757,7 @@ export const ApprovalPage = () => {
         </div>
       </div>
 
+      {/* 筛选栏 */}
       <div className="flex items-center gap-4 flex-wrap">
         <div className="relative flex-1 max-w-md">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-dark-400" />
@@ -481,11 +825,7 @@ export const ApprovalPage = () => {
                 className="input-field w-full"
               >
                 <option value="all">全部产品</option>
-                {allProducts.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
+                {allProducts.map((p) => (<option key={p} value={p}>{p}</option>))}
               </select>
             </div>
             <div>
@@ -496,11 +836,7 @@ export const ApprovalPage = () => {
                 className="input-field w-full"
               >
                 <option value="all">全部申请人</option>
-                {allApplicants.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
+                {allApplicants.map((a) => (<option key={a} value={a}>{a}</option>))}
               </select>
             </div>
             <div>
@@ -516,11 +852,48 @@ export const ApprovalPage = () => {
                 <option value="rejected">已拒绝</option>
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-300 mb-2">当前审批人</label>
+              <select
+                value={approverFilter}
+                onChange={(e) => setApproverFilter(e.target.value)}
+                className="input-field w-full"
+              >
+                <option value="all">全部审批人</option>
+                {allApprovers.map((a) => (<option key={a} value={a}>{a}</option>))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-300 mb-2">风险等级</label>
+              <select
+                value={riskFilter}
+                onChange={(e) => setRiskFilter(e.target.value)}
+                className="input-field w-full"
+              >
+                <option value="all">全部等级</option>
+                <option value="low">低风险</option>
+                <option value="medium">中风险</option>
+                <option value="high">高风险</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-dark-300 mb-2">超时情况</label>
+              <select
+                value={overdueFilter}
+                onChange={(e) => setOverdueFilter(e.target.value)}
+                className="input-field w-full"
+              >
+                <option value="all">全部</option>
+                <option value="yes">已超时</option>
+                <option value="no">未超时</option>
+              </select>
+            </div>
           </div>
         </motion.div>
       )}
 
-      {batchMode && activeTab === 'todo' && (
+      {/* 批量审批栏 */}
+      {batchMode && (activeTab === 'todo' || activeTab === 'workbench') && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -549,10 +922,15 @@ export const ApprovalPage = () => {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                setSelectedIds([]);
-                setBatchMode(false);
-              }}
+              onClick={() => setShowPreviewModal(true)}
+              disabled={selectedIds.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-40"
+            >
+              <Eye className="w-4 h-4" />
+              预览影响
+            </button>
+            <button
+              onClick={() => { setSelectedIds([]); setBatchMode(false); }}
               className="btn-secondary"
             >
               取消
@@ -569,192 +947,31 @@ export const ApprovalPage = () => {
         </motion.div>
       )}
 
-      <div className="space-y-4">
-        {filteredApprovals.map((approval, index) => {
-          const isMyTurn =
-            approval.status === 'pending' &&
-            approval.nodes[approval.currentNode]?.approver === activeApprover;
-          const rejectReason = getRejectReason(approval);
-          const isSelectable = batchMode && isMyTurn;
-          return (
-            <motion.div
-              key={approval.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: index * 0.05 }}
-              className={clsx(
-                'card p-6 transition-all',
-                isSelectable && selectedIds.includes(approval.id)
-                  ? 'ring-2 ring-accent-cyan bg-accent-cyan/5'
-                  : 'card-hover'
-              )}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-4 flex-1">
-                  {isSelectable && (
-                    <button
-                      onClick={() => toggleSelect(approval.id)}
-                      className="mt-1"
-                    >
-                      {selectedIds.includes(approval.id) ? (
-                        <CheckSquare className="w-5 h-5 text-accent-cyan" />
-                      ) : (
-                        <Square className="w-5 h-5 text-dark-500" />
-                      )}
-                    </button>
-                  )}
-                  <div
-                    className={`w-12 h-12 rounded-xl bg-gradient-to-br ${getApprovalTypeColor(
-                      approval.type
-                    )} flex items-center justify-center flex-shrink-0`}
-                  >
-                    {getApprovalTypeIcon(approval.type)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-1 flex-wrap">
-                      <h3 className="text-lg font-semibold text-white">{approval.title}</h3>
-                      <Badge status={approval.status} />
-                      <span className="px-2 py-0.5 text-xs rounded-full bg-dark-700 text-dark-300">
-                        {getTypeText(approval.type)}
-                      </span>
-                      {lowRiskIds.includes(approval.id) && (
-                        <span className="px-2 py-0.5 text-xs rounded-full bg-accent-green/10 text-accent-green flex items-center gap-1">
-                          <Zap className="w-3 h-3" />
-                          低风险
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-dark-400 mb-3">{approval.productName}</p>
-                    <div className="flex items-center gap-6 text-sm flex-wrap">
-                      <div className="flex items-center gap-2">
-                        <User className="w-4 h-4 text-dark-400" />
-                        <span className="text-dark-300">{approval.applicant}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-dark-400" />
-                        <span className="text-dark-300">{formatDateTime(approval.applyTime)}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <MessageSquare className="w-4 h-4 text-dark-400" />
-                        <span className="text-dark-300">
-                          {approval.nodes.length} 个审批节点
-                        </span>
-                      </div>
-                    </div>
+      {/* 列表（非工作台显示） */}
+      {activeTab !== 'workbench' && (
+        <ApprovalList
+          approvals={filteredApprovals}
+          activeApprover={activeApprover}
+          lowRiskIds={lowRiskIds}
+          isMyTurnCheck={(a) => a.status === 'pending' && a.nodes[a.currentNode]?.approver === activeApprover}
+          getRejectReason={getRejectReason}
+          onViewDetail={(a) => { setSelectedApproval(a); setShowDetailModal(true); }}
+          onQuickApprove={handleQuickApprove}
+          onOpenApprove={(a) => { setSelectedApproval(a); setApproveComment(''); setShowDetailModal(true); }}
+          onOpenReject={(a) => { setSelectedApproval(a); setRejectComment(''); setShowRejectModal(true); }}
+          batchMode={batchMode}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleSelect}
+          getApprovalTypeIcon={getApprovalTypeIcon}
+          getApprovalTypeColor={getApprovalTypeColor}
+          getRiskColor={getRiskColor}
+          getRiskIcon={getRiskIcon}
+          getRiskText={getRiskText}
+          isOverdue={isOverdue}
+        />
+      )}
 
-                    {approval.status === 'rejected' && rejectReason && (
-                      <div className="mt-3 p-3 rounded-lg bg-accent-red/10 border border-accent-red/30">
-                        <div className="flex items-center gap-2 text-accent-red text-sm font-medium mb-1">
-                          <AlertTriangle className="w-4 h-4" />
-                          拒绝原因
-                        </div>
-                        <p className="text-sm text-dark-300">{rejectReason}</p>
-                      </div>
-                    )}
-
-                    <div className="mt-4 flex items-center gap-2 flex-wrap">
-                      {approval.nodes.map((node, nodeIndex) => (
-                        <div key={node.id} className="flex items-center">
-                          <div
-                            className={clsx(
-                              'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
-                              node.status === 'approved'
-                                ? 'bg-accent-green text-white'
-                                : node.status === 'rejected'
-                                ? 'bg-accent-red text-white'
-                                : node.status === 'current'
-                                ? 'bg-accent-cyan text-white animate-pulse'
-                                : 'bg-dark-700 text-dark-400'
-                            )}
-                            title={`${node.name} - ${node.approver}${
-                              node.comment ? `：${node.comment}` : ''
-                            }`}
-                          >
-                            {node.status === 'approved' ? (
-                              <CheckCircle className="w-4 h-4" />
-                            ) : node.status === 'rejected' ? (
-                              <XCircle className="w-4 h-4" />
-                            ) : (
-                              nodeIndex + 1
-                            )}
-                          </div>
-                          {nodeIndex < approval.nodes.length - 1 && (
-                            <div
-                              className={clsx(
-                                'w-8 h-0.5',
-                                node.status === 'approved'
-                                  ? 'bg-accent-green'
-                                  : 'bg-dark-700'
-                              )}
-                            />
-                          )}
-                        </div>
-                      ))}
-                      <span className="ml-2 text-sm text-dark-400">
-                        当前：{approval.nodes[approval.currentNode]?.name}（
-                        {approval.nodes[approval.currentNode]?.approver}）
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => {
-                      setSelectedApproval(approval);
-                      setShowDetailModal(true);
-                    }}
-                    className="flex items-center gap-2 btn-secondary"
-                  >
-                    <Eye className="w-4 h-4" />
-                    查看详情
-                  </button>
-                  {isMyTurn && !batchMode && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleQuickApprove(approval)}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent-green/10 text-accent-green hover:bg-accent-green/20 border border-accent-green/30 transition-colors"
-                        title="快速通过（无意见）"
-                      >
-                        <Zap className="w-4 h-4" />
-                        快速通过
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedApproval(approval);
-                          setApproveComment('');
-                          setShowDetailModal(true);
-                        }}
-                        className="flex items-center gap-2 btn-primary"
-                      >
-                        <ThumbsUp className="w-4 h-4" />
-                        通过
-                      </button>
-                      <button
-                        onClick={() => {
-                          setSelectedApproval(approval);
-                          setRejectComment('');
-                          setShowRejectModal(true);
-                        }}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
-                      >
-                        <ThumbsDown className="w-4 h-4" />
-                        拒绝
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          );
-        })}
-        {filteredApprovals.length === 0 && (
-          <div className="card p-12 text-center text-dark-400">
-            <FileText className="w-12 h-12 mx-auto mb-3 opacity-40" />
-            <p>暂无匹配的审批记录</p>
-          </div>
-        )}
-      </div>
-
+      {/* 详情弹窗 */}
       <Modal
         isOpen={showDetailModal && !!selectedApproval}
         onClose={() => setShowDetailModal(false)}
@@ -788,6 +1005,21 @@ export const ApprovalPage = () => {
                           低风险
                         </span>
                       )}
+                      {selectedApproval.riskLevel && (
+                        <span className={clsx(
+                          'px-2 py-0.5 text-xs rounded-full border flex items-center gap-1',
+                          getRiskColor(selectedApproval.riskLevel)
+                        )}>
+                          {getRiskIcon(selectedApproval.riskLevel)}
+                          {getRiskText(selectedApproval.riskLevel)}
+                        </span>
+                      )}
+                      {isOverdue(selectedApproval) && (
+                        <span className="px-2 py-0.5 text-xs rounded-full bg-accent-red/10 text-accent-red border border-accent-red/20 flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3" />
+                          已超时
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -808,7 +1040,39 @@ export const ApprovalPage = () => {
                   <span className="text-dark-400">关联产品：</span>
                   <span className="text-white">{selectedApproval.productName}</span>
                 </div>
+                {selectedApproval.templateName && (
+                  <div>
+                    <span className="text-dark-400">审批流程：</span>
+                    <span className="text-white">{selectedApproval.templateName}</span>
+                  </div>
+                )}
+                {selectedApproval.deadline && (
+                  <div>
+                    <span className="text-dark-400">处理时限：</span>
+                    <span className={clsx(isOverdue(selectedApproval) ? 'text-accent-red' : 'text-white')}>
+                      {formatDateTime(selectedApproval.deadline)}
+                    </span>
+                  </div>
+                )}
+                {selectedApproval.amount && selectedApproval.amount > 0 && (
+                  <div>
+                    <span className="text-dark-400">涉及额度：</span>
+                    <span className="text-accent-cyan">{formatNumber(selectedApproval.amount)} 次</span>
+                  </div>
+                )}
               </div>
+              {selectedApproval.templateName && (
+                <div className="mt-4 p-3 rounded-lg bg-accent-cyan/5 border border-accent-cyan/20">
+                  <div className="flex items-center gap-2 text-accent-cyan text-sm mb-1">
+                    <Workflow className="w-4 h-4" />
+                    为什么走这个流程？
+                  </div>
+                  <p className="text-xs text-dark-300">
+                    {approvalTemplates.find((t) => t.key === selectedApproval.templateKey)?.description ||
+                      '根据申请类型和金额自动匹配审批模板'}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div>
@@ -860,7 +1124,13 @@ export const ApprovalPage = () => {
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-white">{node.name}</span>
                             <span className="text-dark-400">·</span>
-                            <span className="text-dark-300">{node.approver}</span>
+                            <span className={clsx(
+                              'text-dark-300',
+                              node.status === 'current' && node.approver === activeApprover && 'text-accent-cyan font-medium'
+                            )}>
+                              {node.approver}
+                              {node.status === 'current' && node.approver === activeApprover && '（轮到我处理）'}
+                            </span>
                           </div>
                           <Badge
                             status={
@@ -895,11 +1165,56 @@ export const ApprovalPage = () => {
               </div>
             </div>
 
+            {/* 操作轨迹与耗时 */}
+            {selectedApproval.trails && selectedApproval.trails.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-white mb-4 flex items-center gap-2">
+                  <History className="w-5 h-5 text-accent-cyan" />
+                  操作轨迹与耗时
+                </h4>
+                <div className="relative">
+                  <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-dark-700" />
+                  <div className="space-y-4">
+                    {selectedApproval.trails.map((trail, idx) => (
+                      <div key={idx} className="relative pl-10">
+                        <div className="absolute left-0 w-8 h-8 rounded-full bg-dark-700 flex items-center justify-center text-xs text-accent-cyan font-medium">
+                          {idx + 1}
+                        </div>
+                        <div className="p-3 rounded-lg bg-dark-700/30 border border-dark-600/50">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-white text-sm">{trail.action}</span>
+                              {trail.nodeName && (
+                                <span className="text-xs px-2 py-0.5 rounded bg-dark-700 text-dark-300">
+                                  {trail.nodeName}
+                                </span>
+                              )}
+                              {trail.duration && (
+                                <span className="text-xs px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan">
+                                  耗时 {trail.duration}
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-xs text-dark-400">{formatDateTime(trail.timestamp)}</span>
+                          </div>
+                          <p className="text-xs text-dark-300">
+                            <span className="text-dark-500">操作人：</span>
+                            {trail.operator}
+                            {trail.remark && <span className="text-dark-500"> · {trail.remark}</span>}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {selectedApproval.status === 'pending' &&
               selectedApproval.nodes[selectedApproval.currentNode]?.approver ===
                 activeApprover && (
                 <div className="p-4 rounded-xl bg-accent-cyan/10 border border-accent-cyan/30">
-                  <h4 className="font-medium text-white mb-3">我的审批</h4>
+                  <h4 className="font-medium text-white mb-3">我的审批（当前节点：{selectedApproval.nodes[selectedApproval.currentNode].name}）</h4>
                   <textarea
                     rows={3}
                     placeholder="请输入审批意见（选填）..."
@@ -941,6 +1256,7 @@ export const ApprovalPage = () => {
         )}
       </Modal>
 
+      {/* 拒绝弹窗 */}
       <Modal
         isOpen={showRejectModal}
         onClose={() => setShowRejectModal(false)}
@@ -974,11 +1290,12 @@ export const ApprovalPage = () => {
         </div>
       </Modal>
 
+      {/* 发起申请弹窗 */}
       <Modal
         isOpen={showCreateModal}
         onClose={() => {
           setShowCreateModal(false);
-          setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '' });
+          setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '', templateKey: '', amount: 0 });
         }}
         title="发起申请"
         size="lg"
@@ -988,12 +1305,14 @@ export const ApprovalPage = () => {
             <label className="block text-sm font-medium text-dark-300 mb-2">申请类型</label>
             <select
               value={createForm.type}
-              onChange={(e) =>
+              onChange={(e) => {
+                const t = e.target.value as ApprovalRequest['type'];
                 setCreateForm({
                   ...createForm,
-                  type: e.target.value as ApprovalRequest['type'],
-                })
-              }
+                  type: t,
+                  templateKey: autoSelectTemplate(t, createForm.amount),
+                });
+              }}
               className="input-field"
             >
               <option value="renewal">续订申请</option>
@@ -1016,6 +1335,59 @@ export const ApprovalPage = () => {
                 </option>
               ))}
             </select>
+          </div>
+          {(createForm.type === 'quota_expand' || createForm.type === 'new_subscription') && (
+            <div>
+              <label className="block text-sm font-medium text-dark-300 mb-2">
+                申请额度/金额 <span className="text-dark-500">（超过50000会自动选用高金额三级流程）</span>
+              </label>
+              <input
+                type="number"
+                value={createForm.amount || ''}
+                onChange={(e) => {
+                  const amt = Number(e.target.value) || 0;
+                  setCreateForm({
+                    ...createForm,
+                    amount: amt,
+                    templateKey: autoSelectTemplate(createForm.type, amt),
+                  });
+                }}
+                className="input-field"
+                placeholder="请输入额度/金额（单位：次）"
+              />
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-dark-300 mb-2">审批模板</label>
+            <select
+              value={createForm.templateKey}
+              onChange={(e) => setCreateForm({ ...createForm, templateKey: e.target.value as ApprovalTemplateKey })}
+              className="input-field"
+            >
+              <option value="">自动选择（推荐）</option>
+              {approvalTemplates.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.name} — {t.description}
+                </option>
+              ))}
+            </select>
+            {createForm.templateKey && (
+              <div className="mt-2 p-3 rounded-lg bg-dark-700/30 border border-dark-600">
+                <p className="text-xs text-dark-400 mb-1">流程预览：</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {approvalTemplates
+                    .find((t) => t.key === createForm.templateKey)
+                    ?.levels.map((lvl, idx, arr) => (
+                      <span key={idx} className="flex items-center gap-2">
+                        <span className="text-xs px-2 py-1 rounded bg-accent-cyan/10 text-accent-cyan">
+                          {lvl.name} · {lvl.approver}
+                        </span>
+                        {idx < arr.length - 1 && <ChevronRight className="w-3 h-3 text-dark-500" />}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-dark-300 mb-2">申请标题</label>
@@ -1041,7 +1413,7 @@ export const ApprovalPage = () => {
             <button
               onClick={() => {
                 setShowCreateModal(false);
-                setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '' });
+                setCreateForm({ type: 'renewal', subscriptionId: '', title: '', reason: '', templateKey: '', amount: 0 });
               }}
               className="btn-secondary"
             >
@@ -1057,6 +1429,363 @@ export const ApprovalPage = () => {
           </div>
         </div>
       </Modal>
+
+      {/* 批量预览影响 */}
+      <Modal
+        isOpen={showPreviewModal}
+        onClose={() => setShowPreviewModal(false)}
+        title="批量审批影响预览"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="p-4 rounded-xl bg-accent-cyan/10 border border-accent-cyan/20">
+            <p className="text-sm text-dark-200">
+              本次批量通过共 <span className="text-accent-cyan font-semibold">{selectedIds.length}</span> 条申请，会带来以下联动影响：
+            </p>
+          </div>
+          <div className="space-y-3">
+            {batchImpact.products.length > 0 && (
+              <div className="p-4 rounded-xl bg-dark-700/30">
+                <p className="text-sm text-dark-400 mb-2">涉及产品</p>
+                <div className="flex flex-wrap gap-2">
+                  {batchImpact.products.map((p) => (
+                    <span key={p} className="text-xs px-3 py-1 rounded-full bg-dark-700 text-white">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {batchImpact.quotaIncrease > 0 && (
+              <div className="p-4 rounded-xl bg-accent-orange/10 border border-accent-orange/20">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-dark-200 flex items-center gap-2">
+                    <Zap className="w-4 h-4 text-accent-orange" />
+                    额度扩容合计
+                  </p>
+                  <p className="text-lg font-bold font-display text-accent-orange">
+                    +{formatNumber(batchImpact.quotaIncrease)} 次
+                  </p>
+                </div>
+                <p className="text-xs text-dark-400 mt-2">
+                  额度总览、产品对比、产品订阅的额度数字会同时增加
+                </p>
+              </div>
+            )}
+            {batchImpact.subscriptionActivate.length > 0 && (
+              <div className="p-4 rounded-xl bg-accent-green/10 border border-accent-green/20">
+                <p className="text-sm text-dark-200 flex items-center gap-2 mb-2">
+                  <Database className="w-4 h-4 text-accent-green" />
+                  激活以下待生效订阅
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {batchImpact.subscriptionActivate.map((p, i) => (
+                    <span key={i} className="text-xs px-3 py-1 rounded-full bg-accent-green/10 text-accent-green border border-accent-green/20">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {batchImpact.renewalExtend.length > 0 && (
+              <div className="p-4 rounded-xl bg-accent-cyan/10 border border-accent-cyan/20">
+                <p className="text-sm text-dark-200 flex items-center gap-2 mb-2">
+                  <RefreshCw className="w-4 h-4 text-accent-cyan" />
+                  以下订阅期限 +12 个月
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {batchImpact.renewalExtend.map((p, i) => (
+                    <span key={i} className="text-xs px-3 py-1 rounded-full bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {batchImpact.termination.length > 0 && (
+              <div className="p-4 rounded-xl bg-accent-red/10 border border-accent-red/20">
+                <p className="text-sm text-dark-200 flex items-center gap-2 mb-2">
+                  <Ban className="w-4 h-4 text-accent-red" />
+                  以下订阅将被停订
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {batchImpact.termination.map((p, i) => (
+                    <span key={i} className="text-xs px-3 py-1 rounded-full bg-accent-red/10 text-accent-red border border-accent-red/20">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-dark-700">
+            <button
+              onClick={() => setShowPreviewModal(false)}
+              className="btn-secondary"
+            >
+              关闭
+            </button>
+            <button
+              onClick={() => { setShowPreviewModal(false); handleBatchApprove(); }}
+              className="btn-primary flex items-center gap-2"
+            >
+              <ThumbsUp className="w-4 h-4" />
+              确认批量通过
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };
+
+// 审批列表组件（抽离复用）
+interface ApprovalListProps {
+  approvals: ApprovalRequest[];
+  activeApprover: string;
+  lowRiskIds: string[];
+  isMyTurnCheck: (a: ApprovalRequest) => boolean;
+  getRejectReason: (a: ApprovalRequest) => string;
+  onViewDetail: (a: ApprovalRequest) => void;
+  onQuickApprove: (a: ApprovalRequest) => void;
+  onOpenApprove: (a: ApprovalRequest) => void;
+  onOpenReject: (a: ApprovalRequest) => void;
+  batchMode: boolean;
+  selectedIds: string[];
+  onToggleSelect: (id: string) => void;
+  getApprovalTypeIcon: (t: string) => JSX.Element;
+  getApprovalTypeColor: (t: string) => string;
+  getRiskColor: (lvl?: string) => string;
+  getRiskIcon: (lvl?: string) => JSX.Element;
+  getRiskText: (lvl?: string) => string;
+  isOverdue: (a: ApprovalRequest) => boolean;
+}
+
+function ApprovalList({
+  approvals,
+  activeApprover,
+  lowRiskIds,
+  isMyTurnCheck,
+  getRejectReason,
+  onViewDetail,
+  onQuickApprove,
+  onOpenApprove,
+  onOpenReject,
+  batchMode,
+  selectedIds,
+  onToggleSelect,
+  getApprovalTypeIcon,
+  getApprovalTypeColor,
+  getRiskColor,
+  getRiskIcon,
+  getRiskText,
+  isOverdue,
+}: ApprovalListProps) {
+  if (approvals.length === 0) {
+    return (
+      <div className="card p-12 text-center text-dark-400">
+        <FileText className="w-12 h-12 mx-auto mb-3 opacity-40" />
+        <p>暂无匹配的审批记录</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      {approvals.map((approval, index) => {
+        const isMyTurn = isMyTurnCheck(approval);
+        const isSelectable = batchMode && isMyTurn;
+        const rejectReason = getRejectReason(approval);
+        return (
+          <motion.div
+            key={approval.id}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: index * 0.05 }}
+            className={clsx(
+              'card p-6 transition-all',
+              isSelectable && selectedIds.includes(approval.id)
+                ? 'ring-2 ring-accent-cyan bg-accent-cyan/5'
+                : 'card-hover'
+            )}
+          >
+            <div className="flex items-start justify-between">
+              <div className="flex items-start gap-4 flex-1">
+                {isSelectable && (
+                  <button onClick={() => onToggleSelect(approval.id)} className="mt-1">
+                    {selectedIds.includes(approval.id) ? (
+                      <CheckSquare className="w-5 h-5 text-accent-cyan" />
+                    ) : (
+                      <Square className="w-5 h-5 text-dark-500" />
+                    )}
+                  </button>
+                )}
+                <div
+                  className={`w-12 h-12 rounded-xl bg-gradient-to-br ${getApprovalTypeColor(
+                    approval.type
+                  )} flex items-center justify-center flex-shrink-0`}
+                >
+                  {getApprovalTypeIcon(approval.type)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 mb-1 flex-wrap">
+                    <h3 className="text-lg font-semibold text-white">{approval.title}</h3>
+                    <Badge status={approval.status} />
+                    <span className="px-2 py-0.5 text-xs rounded-full bg-dark-700 text-dark-300">
+                      {getTypeText(approval.type)}
+                    </span>
+                    {lowRiskIds.includes(approval.id) && (
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-accent-green/10 text-accent-green flex items-center gap-1">
+                        <Zap className="w-3 h-3" />
+                        低风险
+                      </span>
+                    )}
+                    {approval.riskLevel && (
+                      <span className={clsx(
+                        'px-2 py-0.5 text-xs rounded-full border flex items-center gap-1',
+                        getRiskColor(approval.riskLevel)
+                      )}>
+                        {getRiskIcon(approval.riskLevel)}
+                        {getRiskText(approval.riskLevel)}
+                      </span>
+                    )}
+                    {isOverdue(approval) && (
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-accent-red/10 text-accent-red border border-accent-red/20 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" />
+                        已超时
+                      </span>
+                    )}
+                    {approval.templateName && (
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-dark-700/50 text-dark-300 border border-dark-600 flex items-center gap-1">
+                        <Workflow className="w-3 h-3" />
+                        {approval.templateName}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-dark-400 mb-3">{approval.productName}</p>
+                  <div className="flex items-center gap-6 text-sm flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <User className="w-4 h-4 text-dark-400" />
+                      <span className="text-dark-300">{approval.applicant}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Calendar className="w-4 h-4 text-dark-400" />
+                      <span className="text-dark-300">{formatDateTime(approval.applyTime)}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-dark-400" />
+                      <span className="text-dark-300">
+                        {approval.nodes.length} 个审批节点
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <EyeOff className="w-4 h-4 text-dark-400" />
+                      <span className="text-dark-300">
+                        当前：{approval.nodes[approval.currentNode]?.name}（
+                        <span className={clsx(
+                          approval.nodes[approval.currentNode]?.approver === activeApprover
+                            ? 'text-accent-cyan font-medium'
+                            : 'text-dark-300'
+                        )}>
+                          {approval.nodes[approval.currentNode]?.approver}
+                        </span>
+                        ）
+                      </span>
+                    </div>
+                  </div>
+
+                  {approval.status === 'rejected' && rejectReason && (
+                    <div className="mt-3 p-3 rounded-lg bg-accent-red/10 border border-accent-red/30">
+                      <div className="flex items-center gap-2 text-accent-red text-sm font-medium mb-1">
+                        <AlertTriangle className="w-4 h-4" />
+                        拒绝原因
+                      </div>
+                      <p className="text-sm text-dark-300">{rejectReason}</p>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center gap-2 flex-wrap">
+                    {approval.nodes.map((node, nodeIndex) => (
+                      <div key={node.id} className="flex items-center">
+                        <div
+                          className={clsx(
+                            'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
+                            node.status === 'approved'
+                              ? 'bg-accent-green text-white'
+                              : node.status === 'rejected'
+                              ? 'bg-accent-red text-white'
+                              : node.status === 'current'
+                              ? clsx(
+                                'bg-accent-cyan text-white',
+                                node.approver === activeApprover ? 'animate-pulse ring-2 ring-accent-cyan/50' : 'animate-pulse'
+                              )
+                              : 'bg-dark-700 text-dark-400'
+                          )}
+                          title={`${node.name} - ${node.approver}${
+                            node.comment ? `：${node.comment}` : ''
+                          }`}
+                        >
+                          {node.status === 'approved' ? (
+                            <CheckCircle className="w-4 h-4" />
+                          ) : node.status === 'rejected' ? (
+                            <XCircle className="w-4 h-4" />
+                          ) : (
+                            nodeIndex + 1
+                          )}
+                        </div>
+                        {nodeIndex < approval.nodes.length - 1 && (
+                          <div
+                            className={clsx(
+                              'w-8 h-0.5',
+                              node.status === 'approved'
+                                ? 'bg-accent-green'
+                                : 'bg-dark-700'
+                            )}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => onViewDetail(approval)}
+                  className="flex items-center gap-2 btn-secondary"
+                >
+                  <Eye className="w-4 h-4" />
+                  查看详情
+                </button>
+                {isMyTurn && !batchMode && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => onQuickApprove(approval)}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent-green/10 text-accent-green hover:bg-accent-green/20 border border-accent-green/30 transition-colors"
+                      title="快速通过（无需勾选）"
+                    >
+                      <Zap className="w-4 h-4" />
+                      快速通过
+                    </button>
+                    <button
+                      onClick={() => onOpenApprove(approval)}
+                      className="flex items-center gap-2 btn-primary"
+                    >
+                      <ThumbsUp className="w-4 h-4" />
+                      通过
+                    </button>
+                    <button
+                      onClick={() => onOpenReject(approval)}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
+                    >
+                      <ThumbsDown className="w-4 h-4" />
+                      拒绝
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}

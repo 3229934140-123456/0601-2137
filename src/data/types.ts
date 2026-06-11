@@ -152,6 +152,15 @@ export interface Member {
   joinDate: string;
 }
 
+export type ApprovalTemplateKey = 'low_risk' | 'high_amount' | 'termination_special' | 'standard_3' | 'renewal_standard';
+
+export interface ApprovalTemplate {
+  key: ApprovalTemplateKey;
+  name: string;
+  description: string;
+  levels: { name: string; approver: string }[];
+}
+
 export interface ApprovalNode {
   id: string;
   name: string;
@@ -159,6 +168,16 @@ export interface ApprovalNode {
   status: 'pending' | 'approved' | 'rejected' | 'current';
   approveTime?: string;
   comment?: string;
+  arriveTime?: string;
+}
+
+export interface ApprovalTrail {
+  timestamp: string;
+  operator: string;
+  action: string;
+  nodeName?: string;
+  duration?: string;
+  remark?: string;
 }
 
 export interface ApprovalRequest {
@@ -173,6 +192,12 @@ export interface ApprovalRequest {
   status: 'pending' | 'approved' | 'rejected';
   currentNode: number;
   nodes: ApprovalNode[];
+  templateKey?: ApprovalTemplateKey;
+  templateName?: string;
+  amount?: number;
+  trails?: ApprovalTrail[];
+  riskLevel?: 'low' | 'medium' | 'high';
+  deadline?: string;
 }
 
 export interface Notification {

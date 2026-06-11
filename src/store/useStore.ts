@@ -9,6 +9,10 @@ import type {
   Quota,
   Receiver,
   Permission,
+  ApprovalTemplate,
+  ApprovalTemplateKey,
+  ApprovalTrail,
+  ApprovalNode,
 } from '../data/types';
 import {
   mockProducts,
@@ -30,12 +34,23 @@ interface StoreState extends AppState {
   rolePermissionsMap: Record<string, Permission[]>;
   activeApprover: string;
   pendingDetailId: { approval?: string; quality?: string };
+  approvalTemplates: ApprovalTemplate[];
   setSubscriptions: (subscriptions: Subscription[]) => void;
   addSubscription: (subscription: Subscription) => void;
   updateSubscription: (subscription: Subscription) => void;
   addFeedback: (feedback: QualityFeedback) => void;
   updateFeedback: (feedback: QualityFeedback) => void;
   addApproval: (approval: ApprovalRequest) => void;
+  addApprovalWithTemplate: (args: {
+    type: ApprovalRequest['type'];
+    subscriptionId: string;
+    productName: string;
+    title: string;
+    reason: string;
+    applicant: string;
+    templateKey?: ApprovalTemplateKey;
+    amount?: number;
+  }) => ApprovalRequest;
   updateApproval: (approval: ApprovalRequest) => void;
   updateMember: (member: Member) => void;
   updateQuota: (quota: Quota) => void;
@@ -44,11 +59,19 @@ interface StoreState extends AppState {
   markAllNotificationsRead: () => void;
   approveAndApplyEffect: (approval: ApprovalRequest) => void;
   batchApproveLowRisk: (approvalIds: string[]) => void;
+  previewBatchImpact: (approvalIds: string[]) => {
+    products: string[];
+    quotaIncrease: number;
+    subscriptionActivate: string[];
+    renewalExtend: string[];
+    termination: string[];
+  };
   updateRolePermissions: (role: string, permissions: Permission[]) => void;
   applyRolePermissionsToMembers: (role: string) => void;
   pushNotification: (n: Omit<Notification, 'id' | 'read' | 'createdAt'>) => void;
   setActiveApprover: (name: string) => void;
   setPendingDetailId: (key: 'approval' | 'quality', id: string | undefined) => void;
+  autoSelectTemplate: (type: ApprovalRequest['type'], amount?: number) => ApprovalTemplateKey;
 }
 
 export const defaultRolePermissions: Record<string, Permission[]> = {
@@ -90,6 +113,67 @@ export const defaultRolePermissions: Record<string, Permission[]> = {
   ],
 };
 
+export const approvalTemplates: ApprovalTemplate[] = [
+  {
+    key: 'low_risk',
+    name: '低风险两级审批',
+    description: '适用于低金额、低风险日常申请：部门主管 → 财务',
+    levels: [
+      { name: '部门主管审批', approver: '王总' },
+      { name: '财务复核', approver: '赵丽' },
+    ],
+  },
+  {
+    key: 'standard_3',
+    name: '标准三级审批',
+    description: '适用于常规订阅开通：部门主管 → 财务 → 总经理',
+    levels: [
+      { name: '部门主管审批', approver: '王总' },
+      { name: '财务审核', approver: '赵丽' },
+      { name: '总经理审批', approver: '李总' },
+    ],
+  },
+  {
+    key: 'high_amount',
+    name: '高金额三级审批',
+    description: '适用于高金额扩容（>50000次）或高价值新订：部门主管 → 财务 → 总经理',
+    levels: [
+      { name: '部门主管审批', approver: '王总' },
+      { name: '财务审核（高金额）', approver: '赵丽' },
+      { name: '总经理审批', approver: '李总' },
+    ],
+  },
+  {
+    key: 'termination_special',
+    name: '停订专项审批',
+    description: '停订涉及数据留存和合规，额外走合规岗：部门主管 → 合规 → 总经理',
+    levels: [
+      { name: '部门主管审批', approver: '王总' },
+      { name: '合规审核', approver: '周敏' },
+      { name: '总经理审批', approver: '李总' },
+    ],
+  },
+  {
+    key: 'renewal_standard',
+    name: '续订标准两级审批',
+    description: '标准续订流程：部门主管 → 财务',
+    levels: [
+      { name: '部门主管审批', approver: '王总' },
+      { name: '财务审核', approver: '赵丽' },
+    ],
+  },
+];
+
+const calcDuration = (from: string, to: string) => {
+  const diffMs = Math.abs(new Date(to.replace(/-/g, '/')).getTime() - new Date(from.replace(/-/g, '/')).getTime());
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 60) return `${mins} 分钟`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} 小时 ${mins % 60} 分`;
+  const days = Math.floor(hrs / 24);
+  return `${days} 天 ${hrs % 24} 小时`;
+};
+
 export const useStore = create<StoreState>((set, get) => ({
   user: mockCurrentUser,
   subscriptions: mockSubscriptions,
@@ -105,6 +189,7 @@ export const useStore = create<StoreState>((set, get) => ({
   rolePermissionsMap: defaultRolePermissions,
   activeApprover: mockCurrentUser.name,
   pendingDetailId: {},
+  approvalTemplates,
 
   setActiveApprover: (name) => set({ activeApprover: name }),
 
@@ -112,6 +197,99 @@ export const useStore = create<StoreState>((set, get) => ({
     set((state) => ({
       pendingDetailId: { ...state.pendingDetailId, [key]: id },
     })),
+
+  autoSelectTemplate: (type, amount) => {
+    if (type === 'termination') return 'termination_special';
+    if (type === 'renewal') return 'renewal_standard';
+    if (type === 'quota_expand') {
+      return (amount || 0) > 50000 ? 'high_amount' : 'low_risk';
+    }
+    if (type === 'new_subscription') {
+      return (amount || 0) > 50000 ? 'high_amount' : 'standard_3';
+    }
+    return 'standard_3';
+  },
+
+  addApprovalWithTemplate: ({ type, subscriptionId, productName, title, reason, applicant, templateKey, amount }) => {
+    const now = new Date();
+    const nowStr = formatDate(now, 'YYYY-MM-DD HH:mm:ss');
+    const tplKey = templateKey || get().autoSelectTemplate(type, amount);
+    const tpl = get().approvalTemplates.find((t) => t.key === tplKey) || get().approvalTemplates[0];
+
+    let riskLevel: ApprovalRequest['riskLevel'] = 'medium';
+    if (type === 'termination') riskLevel = 'high';
+    else if (type === 'quota_expand') riskLevel = (amount || 0) > 50000 ? 'high' : 'low';
+    else if (type === 'new_subscription') riskLevel = (amount || 0) > 50000 ? 'high' : 'medium';
+    else if (type === 'renewal') riskLevel = 'low';
+
+    const deadline = new Date(now);
+    deadline.setDate(deadline.getDate() + (riskLevel === 'high' ? 1 : 3));
+
+    const id = `a_${Date.now()}`;
+    const nodes: ApprovalNode[] = tpl.levels.map((lvl, idx) => ({
+      id: `${id}_n${idx + 1}`,
+      name: lvl.name,
+      approver: lvl.approver,
+      status: idx === 0 ? 'current' : 'pending',
+      arriveTime: idx === 0 ? nowStr : undefined,
+    }));
+
+    const trails: ApprovalTrail[] = [
+      {
+        timestamp: nowStr,
+        operator: applicant,
+        action: '提交申请',
+        remark: `选用流程「${tpl.name}」：${tpl.description}`,
+      },
+    ];
+
+    const approval: ApprovalRequest = {
+      id,
+      type,
+      title,
+      subscriptionId,
+      productName,
+      applicant,
+      applyTime: nowStr,
+      reason,
+      status: 'pending',
+      currentNode: 0,
+      nodes,
+      templateKey: tpl.key,
+      templateName: tpl.name,
+      amount,
+      trails,
+      riskLevel,
+      deadline: formatDate(deadline, 'YYYY-MM-DD HH:mm:ss'),
+    };
+
+    set((state) => ({ approvals: [approval, ...state.approvals] }));
+    return approval;
+  },
+
+  previewBatchImpact: (approvalIds) => {
+    const products: string[] = [];
+    let quotaIncrease = 0;
+    const subscriptionActivate: string[] = [];
+    const renewalExtend: string[] = [];
+    const termination: string[] = [];
+    const state = get();
+    state.approvals.forEach((a) => {
+      if (!approvalIds.includes(a.id) || a.status !== 'pending') return;
+      if (!products.includes(a.productName)) products.push(a.productName);
+      if (a.type === 'quota_expand') {
+        const m = a.reason.match(/扩容额度[：:]\s*(\d+)/);
+        quotaIncrease += m ? parseInt(m[1], 10) : a.amount || 0;
+      } else if (a.type === 'new_subscription') {
+        subscriptionActivate.push(a.productName);
+      } else if (a.type === 'renewal') {
+        renewalExtend.push(a.productName);
+      } else if (a.type === 'termination') {
+        termination.push(a.productName);
+      }
+    });
+    return { products, quotaIncrease, subscriptionActivate, renewalExtend, termination };
+  },
 
   pushNotification: (n) => {
     const state = get();
@@ -199,19 +377,72 @@ export const useStore = create<StoreState>((set, get) => ({
     let updatedQuotas = state.quotas;
     let updatedSubscriptions = state.subscriptions;
 
-    if (approval.status === 'approved' && approval.type === 'quota_expand') {
-      const matchReason = approval.reason.match(/扩容额度[：:]\s*(\d+)/);
-      const expandAmount = matchReason ? parseInt(matchReason[1], 10) : 0;
+    const cloneApproval: ApprovalRequest = JSON.parse(JSON.stringify(approval));
+    const oldApproval = state.approvals.find((a) => a.id === approval.id);
+    const trails: ApprovalTrail[] = oldApproval?.trails ? JSON.parse(JSON.stringify(oldApproval.trails)) : [{ timestamp: oldApproval?.applyTime || cloneApproval.applyTime, operator: oldApproval?.applicant || cloneApproval.applicant, action: '提交申请' }];
+
+    cloneApproval.nodes.forEach((node, idx) => {
+      if (node.status === 'approved' && oldApproval?.nodes[idx]?.status !== 'approved') {
+        const duration = (oldApproval?.nodes[idx]?.arriveTime || oldApproval?.applyTime)
+          ? calcDuration(oldApproval.nodes[idx]?.arriveTime || oldApproval.applyTime, node.approveTime || nowStr)
+          : undefined;
+        trails.push({
+          timestamp: node.approveTime || nowStr,
+          operator: node.approver,
+          action: '通过',
+          nodeName: node.name,
+          remark: node.comment || '通过审批',
+          duration,
+        });
+        if (idx < cloneApproval.nodes.length - 1 && cloneApproval.currentNode === idx + 1) {
+          const next = cloneApproval.nodes[idx + 1];
+          if (!next.arriveTime) next.arriveTime = nowStr;
+          trails.push({
+            timestamp: nowStr,
+            operator: '系统',
+            action: '流转到下一节点',
+            nodeName: next.name,
+            remark: `交由 ${next.approver} 处理`,
+          });
+        }
+      }
+      if (node.status === 'rejected' && oldApproval?.nodes[idx]?.status !== 'rejected') {
+        const duration = (oldApproval?.nodes[idx]?.arriveTime || oldApproval?.applyTime)
+          ? calcDuration(oldApproval.nodes[idx]?.arriveTime || oldApproval.applyTime, node.approveTime || nowStr)
+          : undefined;
+        trails.push({
+          timestamp: node.approveTime || nowStr,
+          operator: node.approver,
+          action: '拒绝',
+          nodeName: node.name,
+          remark: node.comment || '拒绝申请',
+          duration,
+        });
+      }
+    });
+
+    if (cloneApproval.status === 'approved') {
+      trails.push({ timestamp: nowStr, operator: '系统', action: '审批完成', remark: '全部节点通过，申请生效' });
+    }
+    if (cloneApproval.status === 'rejected') {
+      trails.push({ timestamp: nowStr, operator: '系统', action: '审批终止', remark: '申请被拒绝，流程结束' });
+    }
+
+    cloneApproval.trails = trails;
+
+    if (cloneApproval.status === 'approved' && cloneApproval.type === 'quota_expand') {
+      const matchReason = cloneApproval.reason.match(/扩容额度[：:]\s*(\d+)/);
+      const expandAmount = (cloneApproval.amount || 0) > 0 ? cloneApproval.amount : (matchReason ? parseInt(matchReason[1], 10) : 0);
 
       if (expandAmount > 0) {
         updatedQuotas = state.quotas.map((q) => {
-          if (q.subscriptionId === approval.subscriptionId) {
+          if (q.subscriptionId === cloneApproval.subscriptionId) {
             return { ...q, totalQuota: q.totalQuota + expandAmount };
           }
           return q;
         });
         updatedSubscriptions = state.subscriptions.map((s) => {
-          if (s.id === approval.subscriptionId) {
+          if (s.id === cloneApproval.subscriptionId) {
             return { ...s, quota: s.quota + expandAmount };
           }
           return s;
@@ -219,18 +450,18 @@ export const useStore = create<StoreState>((set, get) => ({
       }
     }
 
-    if (approval.status === 'approved' && approval.type === 'new_subscription') {
+    if (cloneApproval.status === 'approved' && cloneApproval.type === 'new_subscription') {
       updatedSubscriptions = state.subscriptions.map((s) => {
-        if (s.id === approval.subscriptionId && s.status === 'pending') {
+        if (s.id === cloneApproval.subscriptionId && s.status === 'pending') {
           return { ...s, status: 'active' as const };
         }
         return s;
       });
     }
 
-    if (approval.status === 'approved' && approval.type === 'renewal') {
+    if (cloneApproval.status === 'approved' && cloneApproval.type === 'renewal') {
       updatedSubscriptions = state.subscriptions.map((s) => {
-        if (s.id === approval.subscriptionId) {
+        if (s.id === cloneApproval.subscriptionId) {
           const endDate = new Date(s.endDate);
           endDate.setMonth(endDate.getMonth() + 12);
           return {
@@ -243,9 +474,9 @@ export const useStore = create<StoreState>((set, get) => ({
       });
     }
 
-    if (approval.status === 'approved' && approval.type === 'termination') {
+    if (cloneApproval.status === 'approved' && cloneApproval.type === 'termination') {
       updatedSubscriptions = state.subscriptions.map((s) => {
-        if (s.id === approval.subscriptionId) {
+        if (s.id === cloneApproval.subscriptionId) {
           return { ...s, status: 'expired' as const, endDate: formatDate(new Date()) };
         }
         return s;
@@ -253,7 +484,7 @@ export const useStore = create<StoreState>((set, get) => ({
     }
 
     const updatedApprovals = state.approvals.map((a) =>
-      a.id === approval.id ? approval : a
+      a.id === cloneApproval.id ? cloneApproval : a
     );
 
     set({
@@ -262,7 +493,7 @@ export const useStore = create<StoreState>((set, get) => ({
       subscriptions: updatedSubscriptions,
     });
 
-    if (approval.status === 'approved') {
+    if (cloneApproval.status === 'approved') {
       const typeText: Record<string, string> = {
         quota_expand: '额度扩容',
         new_subscription: '新订申请',
@@ -271,14 +502,15 @@ export const useStore = create<StoreState>((set, get) => ({
       };
       get().pushNotification({
         type: 'approval',
-        title: `${typeText[approval.type] || '申请'}已通过`,
-        message: `【${approval.productName}】的申请已通过审批，相关数据已同步更新。`,
+        title: `${typeText[cloneApproval.type] || '申请'}已通过`,
+        message: `【${cloneApproval.productName}】的申请已通过审批，相关数据已同步更新。`,
         page: 'approval',
-        params: { id: approval.id },
+        params: { id: cloneApproval.id },
       });
-    } else if (approval.status === 'rejected') {
-      const lastNode = approval.nodes[approval.nodes.length - 1];
-      const rejectMsg = lastNode?.comment || '未填写拒绝原因';
+    } else if (cloneApproval.status === 'rejected') {
+      const lastNode = cloneApproval.nodes[cloneApproval.nodes.length - 1];
+      const rejectNode = [...cloneApproval.nodes].reverse().find((n) => n.status === 'rejected');
+      const rejectMsg = rejectNode?.comment || lastNode?.comment || '未填写拒绝原因';
       const typeText: Record<string, string> = {
         quota_expand: '额度扩容',
         new_subscription: '新订申请',
@@ -287,10 +519,10 @@ export const useStore = create<StoreState>((set, get) => ({
       };
       get().pushNotification({
         type: 'approval',
-        title: `${typeText[approval.type] || '申请'}被拒绝`,
-        message: `【${approval.productName}】申请被拒绝：${rejectMsg}`,
+        title: `${typeText[cloneApproval.type] || '申请'}被拒绝`,
+        message: `【${cloneApproval.productName}】申请被拒绝：${rejectMsg}`,
         page: 'approval',
-        params: { id: approval.id },
+        params: { id: cloneApproval.id },
       });
     }
   },

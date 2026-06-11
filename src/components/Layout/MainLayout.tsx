@@ -32,6 +32,10 @@ const pageTitles: Record<string, { title: string; description: string }> = {
     title: '续订审批',
     description: '处理续订、停订、扩容等审批事项',
   },
+  '/notifications': {
+    title: '消息中心',
+    description: '统一收件箱，查看交付、额度、账单、审批、质量等全部消息',
+  },
 };
 
 export const MainLayout = () => {

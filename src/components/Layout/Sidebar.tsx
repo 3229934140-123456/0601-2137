@@ -10,6 +10,7 @@ import {
   Users,
   FileCheck,
   Database,
+  Bell,
 } from 'lucide-react';
 
 const navItems = [
@@ -20,6 +21,7 @@ const navItems = [
   { path: '/billing', label: '费用账单', icon: Receipt },
   { path: '/members', label: '权限成员', icon: Users },
   { path: '/approval', label: '续订审批', icon: FileCheck },
+  { path: '/notifications', label: '消息中心', icon: Bell },
 ];
 
 export const Sidebar = () => {
